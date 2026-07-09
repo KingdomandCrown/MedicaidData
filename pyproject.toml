@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hospitals"
+version = "0.1.0"
+description = "Public U.S. hospital knowledge base — CMS Provider of Services ingestion (Kansas, Maryland, ...)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "MedicaidData" }]
+dependencies = [
+    "requests>=2.28",
+    "SQLAlchemy>=2.0",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+hospitals = "hospitals.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

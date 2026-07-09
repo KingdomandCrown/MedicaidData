@@ -1,0 +1,186 @@
+# Hospitals — a public U.S. hospital knowledge base
+
+A small, reproducible pipeline that builds a knowledge base of U.S. hospitals
+from public federal data. The first data source is the **CMS Provider of
+Services (POS) file**, which lists every Medicare/Medicaid-certified provider
+in the country.
+
+Coverage is built out one state at a time. **Kansas** and **Maryland** work
+today; any other state ships by passing a different `--state`.
+
+The pipeline:
+
+1. **Downloads** the latest CMS Provider of Services file.
+2. **Filters** it to active hospitals in the target state.
+3. **Normalizes** identifiers (CCN, ZIP, phone) and decodes coded fields
+   (provider subtype, ownership, active/terminated status).
+4. **Loads** the result into SQLite (default) or a PostgreSQL-compatible
+   database, recording a provenance row for every run.
+
+---
+
+## Quick start
+
+```bash
+# 1. Install (Python 3.10+)
+python -m venv .venv && source .venv/bin/activate
+pip install -e .            # or: pip install -r requirements.txt
+
+# 2. Ingest active Kansas hospitals from the latest CMS POS file into SQLite
+hospitals ingest --state KS
+
+# 3. Inspect what was loaded
+hospitals stats --state KS
+```
+
+By default the data lands in `data/hospitals.sqlite`. Then do the same for
+Maryland:
+
+```bash
+hospitals ingest --state MD
+```
+
+> If you have not installed the package (`pip install -e .`), run the CLI as a
+> module instead: `PYTHONPATH=src python -m hospitals.cli ingest --state KS`.
+
+### Loading into PostgreSQL
+
+The schema and the upsert logic are portable across SQLite and PostgreSQL.
+Point `--database-url` at any SQLAlchemy URL:
+
+```bash
+pip install -e '.[postgres]'   # installs psycopg
+hospitals ingest --state KS \
+  --database-url "postgresql+psycopg://user:pass@localhost:5432/hospitals"
+```
+
+On both engines the loader performs a native `INSERT ... ON CONFLICT` upsert
+keyed by CCN, so re-running an ingest updates existing rows instead of
+duplicating them.
+
+### Running offline / behind a restricted network
+
+The default path discovers and streams the latest file directly from
+`data.cms.gov`. If outbound access to CMS is blocked (corporate proxy,
+sandboxed CI, egress policy), download the POS **Hospital & Non-Hospital
+Facilities** CSV manually from
+<https://data.cms.gov/provider-characteristics/hospitals-and-other-facilities/provider-of-services-file-hospital-non-hospital-facilities>
+and point the pipeline at the local file:
+
+```bash
+hospitals ingest --state KS --input-file /path/to/pos.csv
+```
+
+The CSV and the API expose the same uppercase column names, so both paths
+produce identical results.
+
+---
+
+## CLI reference
+
+```
+hospitals ingest [options]
+  --state STATE            USPS code or name to ingest (default: KS)
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --input-file PATH        Read a local POS CSV instead of downloading from CMS
+  --include-inactive       Keep providers whose termination code is not "active"
+  --limit N                Cap on raw records read (smoke testing)
+  --echo-sql               Echo SQL statements (debugging)
+
+hospitals stats [--state STATE] [--database-url URL]
+  Show hospital row counts in the database.
+
+Global:
+  --log-level LEVEL        DEBUG | INFO | WARNING | ...  (or $HOSPITALS_LOG_LEVEL)
+  --version
+```
+
+Every run logs its progress (discovery, download, row counts, upsert) and
+writes a row to the `ingestion_runs` table for provenance.
+
+---
+
+## Data model
+
+### `hospitals`
+
+One row per provider, keyed by the normalized 6-character CCN.
+
+| column | notes |
+|---|---|
+| `ccn` | **PK.** CMS Certification Number, normalized to 6 chars |
+| `name` | facility name |
+| `provider_category_code` | `01` = Hospital |
+| `provider_subtype_code` / `provider_subtype` | e.g. `01` → "Short-term (Acute Care)", `09` → "Critical Access Hospital" |
+| `address`, `city`, `state`, `zip5`, `county` | ZIP normalized to 5 digits |
+| `phone` | digits only, 10-digit where possible |
+| `ownership_code` / `ownership_type` | decoded from `GNRL_CNTL_TYPE_CD` |
+| `certified_bed_count` | integer |
+| `certification_date` | parsed date |
+| `termination_code` / `is_active` | `is_active` is true when the POS termination code is `00` |
+| `ssa_state_code`, `fips_state_code` | SSA code is the CCN prefix (Kansas = `17`, Maryland = `21`) |
+| `source`, `source_edition`, `ingested_at` | provenance |
+
+### `ingestion_runs`
+
+One row per ingest: source, state, edition, records read/loaded, timestamps,
+and status.
+
+---
+
+## How identifiers are normalized
+
+- **CCN** (`PRVDR_NUM`): trimmed, upper-cased, and left-padded to 6 digits when
+  a numeric CCN lost a leading zero. The leading two digits are the SSA state
+  code, which we use to cross-check / backfill the state.
+- **State**: taken from `STATE_CD`; if missing, derived from the CCN's SSA
+  prefix.
+- **ZIP**: reduced to the 5-digit ZIP, dropping any ZIP+4 suffix.
+- **Phone**: stripped to digits, dropping a leading US country code.
+- **Active status**: `PGM_TRMNTN_CD == "00"`.
+
+A hospital is any record with `PRVDR_CTGRY_CD == "01"`. Non-hospital providers
+(e.g. skilled nursing facilities) are filtered out.
+
+---
+
+## Project layout
+
+```
+src/hospitals/
+  cli.py            argparse CLI (ingest, stats)
+  ingest.py         orchestration: fetch -> filter -> normalize -> load
+  cms_pos.py        CMS discovery + data-api / CSV / local-file fetching
+  normalize.py      POS column mapping, identifier normalization, code lookups
+  db.py             SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
+  states.py         USPS / SSA / FIPS state reference data
+  logging_config.py logging setup
+tests/
+  fixtures/pos_sample.csv   representative POS rows (synthetic)
+  test_normalize.py         identifier + code normalization
+  test_cms_pos.py           discovery, pagination, CSV reading
+  test_ingest.py            end-to-end into SQLite
+```
+
+---
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pytest
+```
+
+The tests are hermetic: they run the full pipeline against
+`tests/fixtures/pos_sample.csv` (synthetic, format-accurate POS rows) and never
+touch the network. The CMS discovery and pagination logic is tested with
+mocked HTTP responses.
+
+---
+
+## Roadmap
+
+- [x] Kansas — CMS Provider of Services ingestion
+- [x] Maryland — same pipeline, `--state MD`
+- [ ] Enrich with additional CMS sources (Hospital General Information, NPI)
+- [ ] Additional states / national coverage
