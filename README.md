@@ -229,6 +229,26 @@ review.
 The output CSV doubles as the checkpoint: re-running with the same `--output`
 skips CCNs already resolved and only fills gaps.
 
+### Starting from a spreadsheet instead of the database
+
+If the hospital list lives in a per-state Excel workbook (AHD-style "Table of
+Search Results" export, one sheet per state) rather than in the database,
+`scripts/xlsx_to_resolver_input.py` converts it into the resolver's input CSV
+directly:
+
+```bash
+pip install openpyxl
+python scripts/xlsx_to_resolver_input.py \
+  --input CMS_Hospital_List_All_USA.xlsx \
+  --output hospital_input.csv
+```
+
+It locates each sheet's header row (preamble length varies), normalizes CCNs
+and ZIPs to knowledge-base rules (zero-padding, upper-cased federal CCNs),
+dedupes by CCN, and writes rows lacking a CCN to a `*_no_ccn.csv` sidecar for
+manual review rather than dropping them silently. The export carries no
+street address, so `address` is blank — the resolver treats it as optional.
+
 ---
 
 ## Development
