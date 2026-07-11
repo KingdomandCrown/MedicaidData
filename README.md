@@ -258,6 +258,24 @@ as of the March 2025 pricing model — verify in your Cloud Console). Run the
 paid resolver with `--limit 1000` once a month against the same `--output`
 checkpoint and the whole file resolves over a few months at $0.
 
+### Harvesting websites from AHD profile exports
+
+American Hospital Directory profile reports are mostly CMS-derived (HCRIS
+cost-report financials, Medicare claims, Hospital Compare quality), but no
+CMS public use file carries a website — the "Hospital Website" / "System
+Website" rows in an AHD profile are AHD's own editorial enrichment, which
+makes them a high-quality, CCN-keyed source. Given a folder of AHD `.xlsx`
+profile exports (one hospital per file):
+
+```bash
+python scripts/extract_ahd_websites.py --input-dir ahd_reports/ \
+  --output hospital_websites_ahd.csv
+```
+
+The output feeds `verify_hospital_websites.py --results` directly, where
+AHD counts as an independent source for cross-source agreement. Check that
+your AHD subscription terms permit this use of exported reports.
+
 ### Verifying correctness
 
 Resolution (from any source) only says a *listing* matched — not that the
