@@ -229,6 +229,35 @@ review.
 The output CSV doubles as the checkpoint: re-running with the same `--output`
 skips CCNs already resolved and only fills gaps.
 
+### Zero-cost resolution first (Wikidata + OpenStreetMap)
+
+Before paying for a Places pass, `scripts/resolve_hospital_websites_free.py`
+resolves what it can from free open data: Wikidata items with an official
+website (one SPARQL query) and OpenStreetMap `amenity=hospital` objects with
+a `website` tag (one Overpass query per state). Coverage is partial —
+roughly a third to half of hospitals, skewed toward larger active
+facilities — but every hit is one you never pay Google for:
+
+```bash
+python scripts/resolve_hospital_websites_free.py \
+  --input hospital_input.csv \
+  --output hospital_websites_free.csv \
+  --remaining-output hospital_input_remaining.csv
+```
+
+Matching is name-similarity within the same state (there is no CCN in
+either source), with stricter thresholds than the paid resolver since
+there's no returned address to corroborate. The `--remaining-output` file
+contains the hospitals *not* resolved at HIGH confidence, in the input
+schema — feed exactly that file to the paid resolver so you only pay for
+the gap (add `--accept-medium` to also trust MEDIUM matches).
+
+The remaining gap can also be closed for free, slowly: Places API (New)
+Enterprise SKUs include a monthly free-call allowance (about 1,000 calls/mo
+as of the March 2025 pricing model — verify in your Cloud Console). Run the
+paid resolver with `--limit 1000` once a month against the same `--output`
+checkpoint and the whole file resolves over a few months at $0.
+
 ### Starting from a spreadsheet instead of the database
 
 If the hospital list lives in a per-state Excel workbook (AHD-style "Table of
