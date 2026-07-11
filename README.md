@@ -155,12 +155,54 @@ src/hospitals/
   db.py             SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
   states.py         USPS / SSA / FIPS state reference data
   logging_config.py logging setup
+scripts/
+  resolve_hospital_websites.py  bulk website lookup via Google Places API (New)
 tests/
   fixtures/pos_sample.csv   representative POS rows (synthetic)
   test_normalize.py         identifier + code normalization
   test_cms_pos.py           discovery, pagination, CSV reading
   test_ingest.py            end-to-end into SQLite
+  test_resolve_websites.py  website-resolver helpers (offline)
 ```
+
+---
+
+## Resolving hospital websites (Google Places)
+
+No free federal dataset (NPPES, POS, Care Compare) carries a hospital website
+field at CCN grain. `scripts/resolve_hospital_websites.py` closes that gap
+with one Google Places API (New) Text Search call per hospital, requesting
+`websiteUri` directly. It writes results incrementally with a checkpoint, so
+a large run can be stopped and resumed, and flags each match `HIGH` /
+`MEDIUM` / `LOW` confidence so low-confidence hits can be routed to manual
+review.
+
+1. In Google Cloud Console: enable "Places API (New)" and billing, create an
+   API key, and set a daily quota cap + budget alert. **Cost:** requesting
+   `websiteUri` bills on the Enterprise SKU (~$35–40 per 1,000 calls as of
+   mid-2026 — verify at <https://mapsplatform.google.com/pricing/>), so a
+   full national pass (~6,175 hospitals) is roughly $200–250, one time.
+2. Export the input CSV from the database, aliasing columns to the headers
+   the script expects (`ccn, hospital_name, address, city, state, zip`):
+
+   ```bash
+   sqlite3 -header -csv data/hospitals.sqlite \
+     "SELECT ccn, name AS hospital_name, address, city, state, zip5 AS zip
+      FROM hospitals WHERE is_active = 1;" > hospital_input.csv
+   ```
+
+3. Run (start with `--limit` to validate query quality before a full pass):
+
+   ```bash
+   export GOOGLE_PLACES_API_KEY="your-key-here"
+   python scripts/resolve_hospital_websites.py \
+     --input hospital_input.csv \
+     --output hospital_websites_resolved.csv \
+     --limit 25
+   ```
+
+The output CSV doubles as the checkpoint: re-running with the same `--output`
+skips CCNs already resolved and only fills gaps.
 
 ---
 
@@ -182,5 +224,6 @@ mocked HTTP responses.
 
 - [x] Kansas — CMS Provider of Services ingestion
 - [x] Maryland — same pipeline, `--state MD`
+- [x] Hospital website resolution via Google Places (`scripts/resolve_hospital_websites.py`)
 - [ ] Enrich with additional CMS sources (Hospital General Information, NPI)
 - [ ] Additional states / national coverage
