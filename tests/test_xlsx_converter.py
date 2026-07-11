@@ -66,6 +66,7 @@ def test_convert_end_to_end(tmp_path):
     # Alphanumeric federal CCN upper-cased, not padded further.
     assert "17013F" in rows
     assert rows["170012"]["hospital_name"] == "Sunflower General Hospital"
+    assert rows["170012"]["phone"] == "3165550100"
     assert all(r["address"] == "" for r in rows.values())
 
     no_ccn = list(csv.DictReader(open(sidecar)))

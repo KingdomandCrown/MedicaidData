@@ -49,9 +49,13 @@ COLUMN_MAP = {
     "city": "city",
     "state": "state",
     "zip": "zip",
+    "telephone": "phone",
 }
 
-OUTPUT_FIELDS = ["ccn", "hospital_name", "address", "city", "state", "zip"]
+# The resolvers read columns by name, so the extra `phone` column is ignored
+# by them — it exists for verify_hospital_websites.py, where a known phone
+# number appearing on a candidate page is strong evidence of a correct match.
+OUTPUT_FIELDS = ["ccn", "hospital_name", "address", "city", "state", "zip", "phone"]
 
 
 def clean(value) -> str:
@@ -76,6 +80,14 @@ def normalize_zip(value) -> str:
     if not digits:
         return ""
     return digits[:5].zfill(5) if len(digits) >= 5 else digits.zfill(5)
+
+
+def normalize_phone(value) -> str:
+    """Digits only, dropping a leading US country code — same as the KB."""
+    digits = re.sub(r"\D", "", clean(value))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
 
 
 def find_header(rows) -> tuple[int, dict] | None:
@@ -113,6 +125,7 @@ def extract_sheet(ws) -> tuple[list[dict], int]:
                 "city": clean(row[cols["city"]]) if "city" in cols else "",
                 "state": clean(row[cols["state"]]).upper() if "state" in cols else "",
                 "zip": normalize_zip(row[cols["zip"]]) if "zip" in cols else "",
+                "phone": normalize_phone(row[cols["phone"]]) if "phone" in cols else "",
             }
         )
     return records, 0

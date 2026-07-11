@@ -275,8 +275,13 @@ def main():
     args = parser.parse_args()
 
     with open(args.input, "r", newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    input_fields = ["ccn", "hospital_name", "address", "city", "state", "zip"]
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        # Preserve the input schema verbatim (incl. extra columns like phone)
+        # so remaining-output feeds straight back into any downstream step.
+        input_fields = reader.fieldnames or [
+            "ccn", "hospital_name", "address", "city", "state", "zip",
+        ]
     states = sorted({r["state"].upper() for r in rows if r.get("state")})
     print(f"{len(rows)} hospitals across {len(states)} states in {args.input}")
 

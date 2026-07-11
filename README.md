@@ -258,6 +258,36 @@ as of the March 2025 pricing model — verify in your Cloud Console). Run the
 paid resolver with `--limit 1000` once a month against the same `--output`
 checkpoint and the whole file resolves over a few months at $0.
 
+### Verifying correctness
+
+Resolution (from any source) only says a *listing* matched — not that the
+URL is right, alive, or the hospital's own site. `scripts/verify_hospital_websites.py`
+turns resolved candidates into evidence-backed verdicts by fetching every
+candidate page and checking it against facts already known about the
+hospital (name tokens, city, ZIP, phone — the input's `phone` column exists
+for this; a phone match is near-conclusive). It also rewards cross-source
+agreement (the same domain from two independent sources) and flags
+aggregator domains (Facebook, Yelp, Healthgrades, ...) that resolvers
+sometimes return:
+
+```bash
+python scripts/verify_hospital_websites.py \
+  --hospitals hospital_input.csv \
+  --results hospital_websites_free.csv hospital_websites_resolved.csv \
+  --output hospital_websites_verified.csv
+```
+
+Every hospital gets a verdict: `VERIFIED` (strong page evidence or 2+
+sources agree on a live non-aggregator domain), `REVIEW` (reachable but
+weak/conflicting evidence), `DEAD` (nothing reachable), or `NO_CANDIDATE`
+(no source found anything — common for closed hospitals, where "no website"
+is itself the correct answer). Only REVIEW/DEAD/NO_CANDIDATE rows need a
+human; record those decisions in a manual-overrides CSV that always wins
+over automated data. The output doubles as a checkpoint, so the multi-hour
+fetch over ~10k sites can be stopped and resumed. Feeding LOW-confidence
+resolver matches in is encouraged — verification is exactly the tool that
+can redeem them.
+
 ### Starting from a spreadsheet instead of the database
 
 If the hospital list lives in a per-state Excel workbook (AHD-style "Table of
