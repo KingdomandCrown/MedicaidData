@@ -6,6 +6,8 @@ provenance row for the run.
 
 The pipeline is state-parameterized. Kansas is the default; Maryland (and any
 other state in :mod:`hospitals.states`) works by passing a different code.
+Passing ``"ALL"`` (or ``"US"`` / ``"USA"`` / ``"NATIONAL"``) skips the state
+filter entirely and ingests every US hospital in one pass.
 """
 
 from __future__ import annotations
@@ -24,6 +26,9 @@ log = get_logger(__name__)
 
 SOURCE_NAME = "cms_pos"
 
+# --state values that mean "every state" (no state filter at all).
+NATIONAL_STATE_VALUES = {"ALL", "US", "USA", "NATIONAL"}
+
 
 @dataclass
 class IngestSummary:
@@ -38,10 +43,13 @@ class IngestSummary:
 
 def _filter_and_normalize(
     raw_records: Iterable[dict],
-    state_usps: str,
+    state_usps: str | None,
     active_only: bool,
 ) -> tuple[list[normalize.HospitalRecord], int, int, int]:
     """Filter raw records to the state's hospitals and normalize them.
+
+    ``state_usps=None`` means national: no state filter is applied and every
+    hospital record is kept regardless of state.
 
     Returns ``(records, read, hospitals_matched, active_matched)``.
 
@@ -50,7 +58,7 @@ def _filter_and_normalize(
     produces identical results and any API quirks are caught.
     """
 
-    target = state_usps.upper()
+    target = state_usps.upper() if state_usps else None
     read = 0
     hospitals_matched = 0
     active_matched = 0
@@ -61,7 +69,7 @@ def _filter_and_normalize(
         if not normalize.is_hospital(raw):
             continue
         record = normalize.normalize_record(raw)
-        if record.state != target:
+        if target is not None and record.state != target:
             continue
         hospitals_matched += 1
         if record.is_active:
@@ -85,12 +93,14 @@ def ingest_state(
     limit: int | None = None,
     echo_sql: bool = False,
 ) -> IngestSummary:
-    """Ingest hospitals for one state from the CMS POS file.
+    """Ingest hospitals for one state — or all states — from the CMS POS file.
 
     Parameters
     ----------
     state:
-        USPS abbreviation or full name (e.g. ``"KS"`` / ``"Kansas"``).
+        USPS abbreviation or full name (e.g. ``"KS"`` / ``"Kansas"``), or
+        ``"ALL"`` (also ``"US"`` / ``"USA"`` / ``"NATIONAL"``) to ingest every
+        US hospital with no state filter.
     database_url:
         SQLAlchemy URL. Defaults to a local SQLite file. Use a
         ``postgresql+psycopg://`` URL to load into PostgreSQL.
@@ -103,12 +113,15 @@ def ingest_state(
         Cap on raw records read (useful for smoke tests).
     """
 
-    state_obj = resolve_state(state)
+    national = bool(state) and state.strip().upper() in NATIONAL_STATE_VALUES
+    state_obj = None if national else resolve_state(state)
+    state_usps = None if national else state_obj.usps
+    state_label = "ALL" if national else state_obj.usps
     started_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     log.info(
         "Starting CMS POS ingestion for %s (%s); active_only=%s",
-        state_obj.name,
-        state_obj.usps,
+        "all states" if national else state_obj.name,
+        state_label,
         active_only,
     )
 
@@ -129,7 +142,7 @@ def ingest_state(
                 edition = f"{dist.title} ({dist.modified})"
                 raw = cms_pos.iter_data_api_records(
                     dist,
-                    state_usps=state_obj.usps,
+                    state_usps=state_usps,
                     hospitals_only=True,
                 )
                 if limit is not None:
@@ -138,13 +151,13 @@ def ingest_state(
                 raise
         else:
             raw = cms_pos.fetch_records(
-                state_usps=state_obj.usps,
+                state_usps=state_usps,
                 input_file=input_file,
                 limit=limit,
             )
 
         records, read, hospitals_matched, active_matched = _filter_and_normalize(
-            raw, state_obj.usps, active_only
+            raw, state_usps, active_only
         )
         loaded = upsert_hospitals(
             engine, records, source=SOURCE_NAME, edition=edition
@@ -159,7 +172,8 @@ def ingest_state(
         record_run(
             engine,
             source=SOURCE_NAME,
-            state=state_obj.usps,
+            # ingestion_runs.state is a 2-char column; national runs store NULL.
+            state=state_usps,
             edition=edition,
             records_read=read,
             records_loaded=len(records),
@@ -176,14 +190,14 @@ def ingest_state(
             hospitals_matched,
             active_matched,
             loaded,
-            state_obj.usps,
+            state_label,
         )
     else:
         # Surface the failure to the caller.
         raise cms_pos.CmsUnavailableError(message or "ingestion failed")
 
     return IngestSummary(
-        state=state_obj.usps,
+        state=state_label,
         records_read=read,
         hospitals_matched=hospitals_matched,
         active_matched=active_matched,

@@ -70,6 +70,41 @@ def test_ingest_is_idempotent(tmp_path, fixture_csv):
     assert len(runs) == 2  # two provenance rows recorded
 
 
+def test_national_ingest_loads_every_state(tmp_path, fixture_csv):
+    db_url = f"sqlite:///{tmp_path / 'all.sqlite'}"
+    summary = ingest_state(
+        state="ALL",
+        database_url=db_url,
+        input_file=fixture_csv,
+        active_only=True,
+    )
+
+    # 6 hospitals across KS + MD (one terminated); the SNF is still excluded.
+    assert summary.state == "ALL"
+    assert summary.records_read == 7
+    assert summary.hospitals_matched == 6
+    assert summary.active_matched == 5
+    assert summary.loaded == 5
+
+    engine = make_engine(db_url)
+    with engine.connect() as conn:
+        states = {r.state for r in conn.execute(select(hospitals.c.state)).all()}
+        run_state = conn.execute(select(ingestion_runs.c.state)).scalar_one()
+    assert states == {"KS", "MD"}
+    # National runs record NULL in the 2-char ingestion_runs.state column.
+    assert run_state is None
+
+
+def test_national_aliases_accepted(tmp_path, fixture_csv):
+    for alias in ("all", "US", "usa", "National"):
+        db_url = f"sqlite:///{tmp_path / f'{alias.lower()}.sqlite'}"
+        summary = ingest_state(
+            state=alias, database_url=db_url, input_file=fixture_csv
+        )
+        assert summary.state == "ALL"
+        assert summary.loaded == 5
+
+
 def test_maryland_filter_from_same_fixture(tmp_path, fixture_csv):
     db_url = f"sqlite:///{tmp_path / 'md.sqlite'}"
     summary = ingest_state(

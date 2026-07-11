@@ -11,6 +11,10 @@ Load into PostgreSQL instead::
     hospitals ingest --state MD \
         --database-url postgresql+psycopg://user:pass@localhost/hospitals
 
+Ingest every US hospital (no state filter)::
+
+    hospitals ingest --state ALL
+
 Run offline against a downloaded POS CSV::
 
     hospitals ingest --state KS --input-file data/pos.csv
@@ -46,11 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ingest = sub.add_parser("ingest", help="Download and load hospitals for a state.")
+    ingest = sub.add_parser(
+        "ingest", help="Download and load hospitals for a state (or all states)."
+    )
     ingest.add_argument(
         "--state",
         default="KS",
-        help="State USPS code or name to ingest (default: KS).",
+        help='State USPS code or name to ingest, or "ALL" for every US hospital (default: KS).',
     )
     ingest.add_argument(
         "--database-url",

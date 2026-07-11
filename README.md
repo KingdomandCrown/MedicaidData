@@ -5,8 +5,9 @@ from public federal data. The first data source is the **CMS Provider of
 Services (POS) file**, which lists every Medicare/Medicaid-certified provider
 in the country.
 
-Coverage is built out one state at a time. **Kansas** and **Maryland** work
-today; any other state ships by passing a different `--state`.
+Coverage is state-parameterized: **Kansas** is the default, any other state
+works by passing a different `--state`, and `--state ALL` ingests **every US
+hospital** in a single national pass.
 
 The pipeline:
 
@@ -39,6 +40,27 @@ Maryland:
 ```bash
 hospitals ingest --state MD
 ```
+
+### Ingesting all US hospitals
+
+Pass `--state ALL` (aliases: `US`, `USA`, `NATIONAL`) to skip the state filter
+and load the whole country — roughly 6,000+ active hospitals — in one run:
+
+```bash
+hospitals ingest --state ALL
+hospitals stats            # national count
+hospitals stats --state TX # per-state count
+```
+
+The data-api still filters server-side to hospitals (provider category `01`),
+so a national run downloads only hospital rows (a few thousand, paged 1,000 at
+a time), not the full ~100 MB POS file. Because the loader upserts by CCN, a
+national run can safely follow (or be followed by) per-state runs — rows are
+updated in place, never duplicated. The same works offline against a
+downloaded POS CSV: `hospitals ingest --state ALL --input-file /path/to/pos.csv`.
+
+A national run records `NULL` in the `ingestion_runs.state` provenance column
+(the column holds 2-char state codes).
 
 > If you have not installed the package (`pip install -e .`), run the CLI as a
 > module instead: `PYTHONPATH=src python -m hospitals.cli ingest --state KS`.
@@ -80,7 +102,8 @@ produce identical results.
 
 ```
 hospitals ingest [options]
-  --state STATE            USPS code or name to ingest (default: KS)
+  --state STATE            USPS code or name to ingest, or ALL for every
+                           US hospital (default: KS)
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --input-file PATH        Read a local POS CSV instead of downloading from CMS
   --include-inactive       Keep providers whose termination code is not "active"
@@ -182,8 +205,10 @@ review.
    `websiteUri` bills on the Enterprise SKU (~$35–40 per 1,000 calls as of
    mid-2026 — verify at <https://mapsplatform.google.com/pricing/>), so a
    full national pass (~6,175 hospitals) is roughly $200–250, one time.
-2. Export the input CSV from the database, aliasing columns to the headers
-   the script expects (`ccn, hospital_name, address, city, state, zip`):
+2. Make sure the database has the hospitals you want websites for — for a
+   national pass, run `hospitals ingest --state ALL` first. Then export the
+   input CSV, aliasing columns to the headers the script expects
+   (`ccn, hospital_name, address, city, state, zip`):
 
    ```bash
    sqlite3 -header -csv data/hospitals.sqlite \
@@ -224,6 +249,6 @@ mocked HTTP responses.
 
 - [x] Kansas — CMS Provider of Services ingestion
 - [x] Maryland — same pipeline, `--state MD`
+- [x] Additional states / national coverage — `--state ALL`
 - [x] Hospital website resolution via Google Places (`scripts/resolve_hospital_websites.py`)
 - [ ] Enrich with additional CMS sources (Hospital General Information, NPI)
-- [ ] Additional states / national coverage
