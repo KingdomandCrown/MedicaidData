@@ -26,6 +26,7 @@ from .cms_pos import CmsUnavailableError
 from .db import count_charges, count_hospitals, make_engine
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
+from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -101,6 +102,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     charges.add_argument("--echo-sql", action="store_true")
 
+    link = sub.add_parser(
+        "link-charges",
+        help="Link price-transparency files to POS hospitals (fills charge_sources.ccn).",
+    )
+    link.add_argument("--database-url", default=DEFAULT_DB_URL)
+    link.add_argument(
+        "--crosswalk",
+        default=None,
+        help="Optional NPI->CCN crosswalk CSV to load before linking.",
+    )
+    link.add_argument(
+        "--no-name-fallback",
+        action="store_true",
+        help="Disable the name+state heuristic; use the crosswalk only.",
+    )
+
+    xwalk = sub.add_parser(
+        "load-crosswalk",
+        help="Load an NPI->CCN crosswalk CSV into the database.",
+    )
+    xwalk.add_argument("path", help="CSV with 'npi' and 'ccn' columns.")
+    xwalk.add_argument("--database-url", default=DEFAULT_DB_URL)
+    xwalk.add_argument("--source", default="manual", help="Provenance label.")
+
     return parser
 
 
@@ -172,6 +197,37 @@ def _cmd_ingest_charges(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_link_charges(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    if args.crosswalk:
+        try:
+            loaded = load_crosswalk(engine, args.crosswalk)
+        except (FileNotFoundError, ValueError) as exc:
+            log.error("Could not load crosswalk: %s", exc)
+            print(f"\nERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"Loaded {loaded} crosswalk rows.")
+    summary = link_charges(engine, use_name_fallback=not args.no_name_fallback)
+    print(
+        f"\nLinked {summary.by_crosswalk + summary.by_name}/{summary.total} "
+        f"charge sources (crosswalk={summary.by_crosswalk}, "
+        f"name+state={summary.by_name}, unlinked={summary.unlinked})."
+    )
+    return 0
+
+
+def _cmd_load_crosswalk(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    try:
+        loaded = load_crosswalk(engine, args.path, source=args.source)
+    except (FileNotFoundError, ValueError) as exc:
+        log.error("Could not load crosswalk: %s", exc)
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 2
+    print(f"Loaded {loaded} NPI->CCN crosswalk rows.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -183,6 +239,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_stats(args)
     if args.command == "ingest-charges":
         return _cmd_ingest_charges(args)
+    if args.command == "link-charges":
+        return _cmd_link_charges(args)
+    if args.command == "load-crosswalk":
+        return _cmd_load_crosswalk(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 

@@ -118,6 +118,44 @@ keys back to the POS hospitals via an NPI↔CCN crosswalk (a planned step; the
 
 Re-ingesting the same file replaces its prior load (idempotent).
 
+### Linking charges to POS hospitals
+
+Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by
+**CCN**. The MRF schema has no CCN, so the two are joined through an
+**NPI → CCN crosswalk** that you supply as a CSV (columns `npi`, `ccn`, and an
+optional `name`):
+
+```bash
+# Load a crosswalk and link in one step
+hospitals link-charges --crosswalk /path/to/npi_ccn.csv
+
+# Or load once, link later
+hospitals load-crosswalk /path/to/npi_ccn.csv
+hospitals link-charges
+```
+
+Linking fills `charge_sources.ccn` and records how each match was made in
+`charge_sources.link_method`:
+
+- **`crosswalk_npi`** — authoritative match via the NPI → CCN crosswalk.
+- **`name_state`** — heuristic fallback: a hospital whose normalized name +
+  state uniquely matches a POS hospital (skipped when ambiguous). Disable with
+  `--no-name-fallback` to use the crosswalk only.
+
+Once linked, charges join straight to hospitals:
+
+```sql
+SELECT h.name, s.payer_name, s.plan_name, s.negotiated_dollar, s.description
+FROM standard_charges s
+JOIN charge_sources cs ON s.source_id = cs.id
+JOIN hospitals h       ON cs.ccn = h.ccn
+WHERE s.negotiated_dollar IS NOT NULL;
+```
+
+> There is no single authoritative public NPI → CCN file; crosswalks are
+> typically derived from NPPES + CMS provider datasets. The linker is source
+> agnostic — bring any CSV with `npi,ccn` columns.
+
 ---
 
 ## CLI reference
@@ -136,6 +174,14 @@ hospitals ingest-charges PATH [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Cap on items (data rows) read per file
   --echo-sql               Echo SQL statements (debugging)
+
+hospitals link-charges [options]
+  --crosswalk PATH         Load this NPI->CCN CSV before linking
+  --no-name-fallback       Use the crosswalk only (skip the name+state heuristic)
+  --database-url URL       SQLAlchemy URL
+
+hospitals load-crosswalk PATH [--source LABEL] [--database-url URL]
+  Load an NPI->CCN crosswalk CSV (columns: npi, ccn, [name]).
 
 hospitals stats [--state STATE] [--database-url URL]
   Show hospital and standard-charge row counts in the database.
@@ -181,7 +227,12 @@ timestamps, and status.
 One row per ingested price transparency file. Hospital name/location/address,
 `ein`, `primary_npi` (+ all `npis`), `license_number`/`license_state`,
 `mrf_version`, `layout` (`tall`/`wide`), `last_updated_on`, `charge_count`, and
-a reserved `ccn` for the future NPI↔CCN link.
+`ccn`/`link_method` populated by the linker to bridge to POS `hospitals`.
+
+### `npi_ccn_crosswalk`
+
+The NPI → CCN bridge, loaded from a CSV: `npi` (PK), `ccn`, optional `name`,
+`source`, `loaded_at`.
 
 ### `standard_charges`
 
@@ -222,6 +273,7 @@ src/hospitals/
   normalize.py          POS column mapping, identifier normalization, code lookups
   price_transparency.py MRF parser: tall + wide v3.0 layouts, streamed
   ingest_charges.py     charge-file orchestration (single file or directory)
+  link.py               NPI->CCN crosswalk loader + charge<->hospital linker
   db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
   states.py             USPS / SSA / FIPS state reference data
   logging_config.py     logging setup
@@ -234,6 +286,7 @@ tests/
   test_ingest.py                 POS end-to-end into SQLite
   test_price_transparency.py     MRF parsing (tall + wide, unpivot)
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
+  test_link.py                   crosswalk load + NPI/name linking
 ```
 
 ---
@@ -258,6 +311,6 @@ MRF parser is tested on both tall and wide layouts including the wide unpivot.
 - [x] Maryland — same pipeline, `--state MD`
 - [x] Price transparency — CMS v3.0 standard charges (tall + wide), full
       negotiated rates
-- [ ] NPI↔CCN crosswalk to link `charge_sources` to POS `hospitals`
+- [x] NPI↔CCN crosswalk + linker to join `charge_sources` to POS `hospitals`
 - [ ] Enrich with additional CMS sources (Hospital General Information, NPPES)
 - [ ] Additional states / national coverage

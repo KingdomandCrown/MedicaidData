@@ -106,9 +106,21 @@ charge_sources = Table(
     Column("mrf_version", String(16)),
     Column("layout", String(8)),  # tall | wide
     Column("last_updated_on", Date),
-    Column("ccn", String(6), index=True),  # filled later via NPI<->CCN crosswalk
+    Column("ccn", String(6), index=True),  # filled by the NPI<->CCN linker
+    Column("link_method", String(16)),  # crosswalk_npi | name_state | None
     Column("charge_count", Integer),
     Column("ingested_at", DateTime),
+)
+
+# Authoritative NPI -> CCN crosswalk (loaded from a CSV; see hospitals.link).
+npi_ccn_crosswalk = Table(
+    "npi_ccn_crosswalk",
+    metadata,
+    Column("npi", String(10), primary_key=True),
+    Column("ccn", String(6), nullable=False),
+    Column("name", String(255)),
+    Column("source", String(64)),
+    Column("loaded_at", DateTime),
 )
 
 # One row per item x payer x plan standard-charge fact.
