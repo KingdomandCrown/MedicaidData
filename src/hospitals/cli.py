@@ -23,8 +23,9 @@ import sys
 
 from . import __version__
 from .cms_pos import CmsUnavailableError
-from .db import count_hospitals, make_engine
+from .db import count_charges, count_hospitals, make_engine
 from .ingest import ingest_state
+from .ingest_charges import ingest_charge_path
 from .logging_config import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -83,6 +84,23 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--database-url", default=DEFAULT_DB_URL)
     stats.add_argument("--state", default=None, help="Optional state filter.")
 
+    charges = sub.add_parser(
+        "ingest-charges",
+        help="Load a CMS price transparency (standard charges) file or directory.",
+    )
+    charges.add_argument(
+        "path",
+        help="Path to an MRF .csv/.zip, or a directory of them.",
+    )
+    charges.add_argument("--database-url", default=DEFAULT_DB_URL)
+    charges.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap on items (data rows) read per file (smoke testing large files).",
+    )
+    charges.add_argument("--echo-sql", action="store_true")
+
     return parser
 
 
@@ -121,8 +139,36 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 def _cmd_stats(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     total = count_hospitals(engine, args.state)
+    charges = count_charges(engine)
     label = f" in {args.state.upper()}" if args.state else ""
     print(f"{total} hospitals{label}.")
+    print(f"{charges} standard-charge rows.")
+    return 0
+
+
+def _cmd_ingest_charges(args: argparse.Namespace) -> int:
+    try:
+        summaries = ingest_charge_path(
+            args.path,
+            database_url=args.database_url,
+            limit=args.limit,
+            echo_sql=args.echo_sql,
+        )
+    except FileNotFoundError as exc:
+        log.error("File not found: %s", exc)
+        print(f"\nERROR: no such file or directory: {exc}", file=sys.stderr)
+        return 2
+
+    total = sum(s.charges_loaded for s in summaries)
+    print()
+    for s in summaries:
+        print(
+            f"{s.hospital_name or s.source_file} "
+            f"[EIN {s.ein}, NPI {s.primary_npi}, {s.layout}]: "
+            f"loaded {s.charges_loaded} charge rows."
+        )
+    if len(summaries) > 1:
+        print(f"\nTotal: {total} charge rows from {len(summaries)} files.")
     return 0
 
 
@@ -135,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest(args)
     if args.command == "stats":
         return _cmd_stats(args)
+    if args.command == "ingest-charges":
+        return _cmd_ingest_charges(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 

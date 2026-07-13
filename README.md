@@ -1,14 +1,16 @@
 # Hospitals — a public U.S. hospital knowledge base
 
 A small, reproducible pipeline that builds a knowledge base of U.S. hospitals
-from public federal data. The first data source is the **CMS Provider of
-Services (POS) file**, which lists every Medicare/Medicaid-certified provider
-in the country.
+from public federal data. Two data sources feed it today:
 
-Coverage is built out one state at a time. **Kansas** and **Maryland** work
-today; any other state ships by passing a different `--state`.
+1. **CMS Provider of Services (POS) file** — the identity/location spine: every
+   Medicare/Medicaid-certified provider in the country. Coverage is built out
+   one state at a time (**Kansas** and **Maryland** work today; any other state
+   ships by passing a different `--state`).
+2. **CMS Hospital Price Transparency files** — the "standard charges" a hospital
+   publishes, including full negotiated rates per payer and plan.
 
-The pipeline:
+The POS pipeline:
 
 1. **Downloads** the latest CMS Provider of Services file.
 2. **Filters** it to active hospitals in the target state.
@@ -16,6 +18,11 @@ The pipeline:
    (provider subtype, ownership, active/terminated status).
 4. **Loads** the result into SQLite (default) or a PostgreSQL-compatible
    database, recording a provenance row for every run.
+
+The price transparency pipeline parses each hospital's machine-readable file
+(both the "tall" and "wide" CMS v3.0 layouts), keys it by EIN and
+organizational NPI, and loads the full item × payer × plan negotiated-rate
+matrix. See [Price transparency](#price-transparency-standard-charges) below.
 
 ---
 
@@ -76,6 +83,43 @@ produce identical results.
 
 ---
 
+## Price transparency (standard charges)
+
+Since 2024, hospitals must publish a machine-readable "standard charges" file.
+Unlike POS, there is no single national feed — each hospital posts its own file
+on its website — so ingestion is **file-driven**: download the file(s) and
+point the tool at them.
+
+```bash
+# A single hospital's file (.csv or .zip)
+hospitals ingest-charges /path/to/520591656_hospital_standardcharges.csv
+
+# A whole directory of downloaded files
+hospitals ingest-charges /path/to/mrf_downloads/
+
+# Smoke-test a very large file by capping items read
+hospitals ingest-charges /path/to/huge_hospital.zip --limit 1000
+```
+
+The parser handles both physical layouts of the CMS v3.0 schema automatically:
+
+- **tall** — one row per item × payer × plan (`payer_name`/`plan_name` are
+  columns).
+- **wide** — one row per item with each payer/plan spread across its own set of
+  columns (e.g. `standard_charge|AETNA [1003]|AETNA PPO [100307]|negotiated_dollar`).
+  These are unpivoted back into item × payer × plan rows.
+
+Parsing is header-driven (column *order* varies between hospitals), and files
+are streamed — a `.zip` is read without extracting it, so a 340 MB file stays
+memory- and disk-friendly. Each file is keyed by its **EIN** (from the
+filename) and **organizational NPI** (from the metadata), which are the join
+keys back to the POS hospitals via an NPI↔CCN crosswalk (a planned step; the
+`charge_sources.ccn` column is reserved for it).
+
+Re-ingesting the same file replaces its prior load (idempotent).
+
+---
+
 ## CLI reference
 
 ```
@@ -87,8 +131,14 @@ hospitals ingest [options]
   --limit N                Cap on raw records read (smoke testing)
   --echo-sql               Echo SQL statements (debugging)
 
+hospitals ingest-charges PATH [options]
+  PATH                     An MRF .csv/.zip, or a directory of them
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --limit N                Cap on items (data rows) read per file
+  --echo-sql               Echo SQL statements (debugging)
+
 hospitals stats [--state STATE] [--database-url URL]
-  Show hospital row counts in the database.
+  Show hospital and standard-charge row counts in the database.
 
 Global:
   --log-level LEVEL        DEBUG | INFO | WARNING | ...  (or $HOSPITALS_LOG_LEVEL)
@@ -123,8 +173,26 @@ One row per provider, keyed by the normalized 6-character CCN.
 
 ### `ingestion_runs`
 
-One row per ingest: source, state, edition, records read/loaded, timestamps,
-and status.
+One row per POS ingest: source, state, edition, records read/loaded,
+timestamps, and status.
+
+### `charge_sources`
+
+One row per ingested price transparency file. Hospital name/location/address,
+`ein`, `primary_npi` (+ all `npis`), `license_number`/`license_state`,
+`mrf_version`, `layout` (`tall`/`wide`), `last_updated_on`, `charge_count`, and
+a reserved `ccn` for the future NPI↔CCN link.
+
+### `standard_charges`
+
+One row per item × payer × plan, linked to `charge_sources` via `source_id`
+(and denormalized `ein`/`primary_npi` for easy joins). Columns: `description`,
+`code`/`code_type` (+ `additional_codes`), `billing_class`, `setting`, drug
+unit/type, `modifiers`, item-level `gross_charge`/`discounted_cash`/
+`min_charge`/`max_charge`, and per-payer `payer_name`/`plan_name`,
+`negotiated_dollar`/`negotiated_percentage`/`negotiated_algorithm`,
+`methodology`, `median_amount`, `percentile_10`/`percentile_90`, `count`, and
+`additional_notes`.
 
 ---
 
@@ -148,18 +216,24 @@ A hospital is any record with `PRVDR_CTGRY_CD == "01"`. Non-hospital providers
 
 ```
 src/hospitals/
-  cli.py            argparse CLI (ingest, stats)
-  ingest.py         orchestration: fetch -> filter -> normalize -> load
-  cms_pos.py        CMS discovery + data-api / CSV / local-file fetching
-  normalize.py      POS column mapping, identifier normalization, code lookups
-  db.py             SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
-  states.py         USPS / SSA / FIPS state reference data
-  logging_config.py logging setup
+  cli.py                argparse CLI (ingest, ingest-charges, stats)
+  ingest.py             POS orchestration: fetch -> filter -> normalize -> load
+  cms_pos.py            CMS discovery + data-api / CSV / local-file fetching
+  normalize.py          POS column mapping, identifier normalization, code lookups
+  price_transparency.py MRF parser: tall + wide v3.0 layouts, streamed
+  ingest_charges.py     charge-file orchestration (single file or directory)
+  db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
+  states.py             USPS / SSA / FIPS state reference data
+  logging_config.py     logging setup
 tests/
-  fixtures/pos_sample.csv   representative POS rows (synthetic)
-  test_normalize.py         identifier + code normalization
-  test_cms_pos.py           discovery, pagination, CSV reading
-  test_ingest.py            end-to-end into SQLite
+  fixtures/pos_sample.csv        representative POS rows (synthetic)
+  fixtures/mrf_tall_sample.csv   tall-layout standard charges (synthetic)
+  fixtures/mrf_wide_sample.csv   wide-layout standard charges (synthetic)
+  test_normalize.py              identifier + code normalization
+  test_cms_pos.py                discovery, pagination, CSV reading
+  test_ingest.py                 POS end-to-end into SQLite
+  test_price_transparency.py     MRF parsing (tall + wide, unpivot)
+  test_ingest_charges.py         charge ingestion end-to-end into SQLite
 ```
 
 ---
@@ -171,10 +245,10 @@ pip install -e '.[dev]'
 pytest
 ```
 
-The tests are hermetic: they run the full pipeline against
-`tests/fixtures/pos_sample.csv` (synthetic, format-accurate POS rows) and never
-touch the network. The CMS discovery and pagination logic is tested with
-mocked HTTP responses.
+The tests are hermetic: they run the full pipelines against the synthetic,
+format-accurate fixtures in `tests/fixtures/` and never touch the network. The
+CMS discovery and pagination logic is tested with mocked HTTP responses; the
+MRF parser is tested on both tall and wide layouts including the wide unpivot.
 
 ---
 
@@ -182,5 +256,8 @@ mocked HTTP responses.
 
 - [x] Kansas — CMS Provider of Services ingestion
 - [x] Maryland — same pipeline, `--state MD`
-- [ ] Enrich with additional CMS sources (Hospital General Information, NPI)
+- [x] Price transparency — CMS v3.0 standard charges (tall + wide), full
+      negotiated rates
+- [ ] NPI↔CCN crosswalk to link `charge_sources` to POS `hospitals`
+- [ ] Enrich with additional CMS sources (Hospital General Information, NPPES)
 - [ ] Additional states / national coverage
