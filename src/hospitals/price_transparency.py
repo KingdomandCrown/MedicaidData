@@ -138,20 +138,28 @@ def to_int(value) -> int | None:
 
 # --- filename / EIN -------------------------------------------------------
 
-_EIN_RE = re.compile(r"(\d{9})")
+_EIN_RE = re.compile(r"(\d{2})-?(\d{7})")
 
 
 def ein_from_filename(path: str) -> str | None:
     """Extract the 9-digit EIN from a CMS-convention MRF filename.
 
-    CMS names files ``<ein>_<hospital-name>_standardcharges.<ext>``. Uploads
-    sometimes prepend a hex hash (``<hash>-<ein>_...``); we strip that first.
+    CMS names files ``<ein>_<hospital-name>_standardcharges.<ext>``. The EIN may
+    be written with a dash (``24-0795959``) or without (``386006309``). Uploads
+    sometimes prepend a hex hash (``<hash>-<ein>_...``), which we strip first.
     """
 
     base = os.path.basename(path)
     base = re.sub(r"^[0-9a-f]{6,}-", "", base, count=1)  # drop upload hash
     match = _EIN_RE.match(base) or _EIN_RE.search(base)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1) + match.group(2)
+    fallback = re.search(r"\d{9}", base)
+    return fallback.group(0) if fallback else None
+
+
+def _strip_hash_prefix(name: str) -> str:
+    return re.sub(r"^[0-9a-f]{6,}-", "", os.path.basename(name), count=1)
 
 
 # --- file opening ---------------------------------------------------------
@@ -335,9 +343,7 @@ def read_mrf(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator
 
     metadata = parse_metadata(meta_header, meta_values)
     metadata.ein = ein_from_filename(path)
-    metadata.source_file = re.sub(
-        r"^[0-9a-f]{6,}-", "", os.path.basename(path), count=1
-    )
+    metadata.source_file = _strip_hash_prefix(path)
     metadata.layout = detect_layout(data_header)
     log.info(
         "MRF %s: %s (%s layout, NPI=%s, EIN=%s, version=%s)",
@@ -468,3 +474,206 @@ def _wide_rows(
             count=None,
             additional_notes=generic_notes,
         )
+
+
+# --- JSON layout (CMS v2.x/v3.x JSON schema) -------------------------------
+#
+# The JSON schema nests differently from the CSV: hospital metadata at the top,
+# then a ``standard_charge_information`` array where each item has codes, a
+# description, and a ``standard_charges`` array; each of those carries the
+# item-level charges plus a ``payers_information`` array (one entry per payer /
+# plan). We stream it with ijson so a multi-hundred-MB file stays bounded in
+# memory. Files without an org NPI in the body are keyed by EIN (from the
+# filename); linking then relies on the name+state heuristic or an EIN crosswalk.
+
+
+import contextlib  # noqa: E402
+
+
+@contextlib.contextmanager
+def _open_binary(path: str):
+    """Yield a binary stream for a ``.json`` file or a ``.json`` inside a zip."""
+
+    if path.lower().endswith(".zip"):
+        zf = zipfile.ZipFile(path)
+        members = [n for n in zf.namelist() if n.lower().endswith(".json")]
+        if not members:
+            zf.close()
+            raise ValueError(f"no JSON member found inside {path}")
+        raw = zf.open(members[0])
+        try:
+            yield raw
+        finally:
+            raw.close()
+            zf.close()
+    else:
+        fh = open(path, "rb")
+        try:
+            yield fh
+        finally:
+            fh.close()
+
+
+def _read_json_metadata(path: str) -> MrfMetadata:
+    import ijson
+
+    hospital_name = version = last_updated = location = None
+    address: list[str] = []
+    license_number = license_state = None
+    npis: list[str] = []
+
+    with _open_binary(path) as fh:
+        for prefix, event, value in ijson.parse(fh):
+            if event in ("string", "number"):
+                if prefix == "hospital_name":
+                    hospital_name = str(value)
+                elif prefix == "version":
+                    version = str(value)
+                elif prefix == "last_updated_on":
+                    last_updated = str(value)
+                elif prefix in ("hospital_address", "hospital_address.item"):
+                    address.append(str(value))
+                elif prefix in ("hospital_location", "hospital_location.item") and location is None:
+                    location = str(value)
+                elif prefix == "license_information.license_number":
+                    license_number = str(value)
+                elif prefix == "license_information.state":
+                    license_state = str(value).upper()
+                elif prefix.endswith("npi") and str(value).strip().isdigit():
+                    npis.append(str(value).strip())
+            # Stop before streaming the (potentially huge) charges array.
+            if prefix == "standard_charge_information" and event == "start_array":
+                break
+
+    return MrfMetadata(
+        hospital_name=hospital_name,
+        location_name=location or hospital_name,
+        hospital_address="; ".join(address) or None,
+        version=version,
+        last_updated_on=parse_date(last_updated),
+        npis=npis,
+        license_number=license_number,
+        license_state=license_state,
+    )
+
+
+def _json_item_rows(item: dict) -> Iterator[ChargeRow]:
+    codes = [
+        (c.get("code"), c.get("type"))
+        for c in (item.get("code_information") or [])
+        if c.get("code")
+    ]
+    primary_code = primary_type = extra = None
+    if codes:
+        primary_code, primary_type = codes[0][0], codes[0][1]
+        extra = ";".join(f"{t or ''}:{c}" for c, t in codes[1:]) or None
+
+    drug = item.get("drug_information") or {}
+    description = clean_str(item.get("description"))
+
+    for sc in item.get("standard_charges") or []:
+        modifiers = sc.get("modifiers")
+        if isinstance(modifiers, list):
+            modifiers = ";".join(str(m) for m in modifiers) or None
+        base = dict(
+            description=description,
+            code=clean_str(primary_code),
+            code_type=clean_str(primary_type),
+            additional_codes=extra,
+            billing_class=clean_str(sc.get("billing_class")),
+            setting=clean_str(sc.get("setting")),
+            drug_unit_of_measurement=clean_str(drug.get("unit")),
+            drug_type_of_measurement=clean_str(drug.get("type")),
+            modifiers=clean_str(modifiers),
+            gross_charge=to_decimal(sc.get("gross_charge")),
+            discounted_cash=to_decimal(sc.get("discounted_cash")),
+            min_charge=to_decimal(sc.get("minimum")),
+            max_charge=to_decimal(sc.get("maximum")),
+        )
+        payers = sc.get("payers_information") or []
+        if payers:
+            for p in payers:
+                yield ChargeRow(
+                    **base,
+                    payer_name=clean_str(p.get("payer_name")),
+                    plan_name=clean_str(p.get("plan_name")),
+                    negotiated_dollar=to_decimal(p.get("standard_charge_dollar")),
+                    negotiated_percentage=to_decimal(p.get("standard_charge_percentage")),
+                    negotiated_algorithm=clean_str(p.get("standard_charge_algorithm")),
+                    methodology=clean_str(p.get("methodology")),
+                    median_amount=to_decimal(p.get("estimated_amount")),
+                    percentile_10=None,
+                    percentile_90=None,
+                    count=None,
+                    additional_notes=clean_str(p.get("additional_payer_notes")),
+                )
+        else:
+            yield ChargeRow(
+                **base,
+                payer_name=None,
+                plan_name=None,
+                negotiated_dollar=None,
+                negotiated_percentage=None,
+                negotiated_algorithm=None,
+                methodology=None,
+                median_amount=None,
+                percentile_10=None,
+                percentile_90=None,
+                count=None,
+                additional_notes=None,
+            )
+
+
+def read_mrf_json(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator[ChargeRow]]:
+    """Open a JSON MRF and return ``(metadata, charge_row_iterator)``, streamed."""
+
+    import ijson
+
+    metadata = _read_json_metadata(path)
+    metadata.ein = ein_from_filename(path)
+    metadata.source_file = _strip_hash_prefix(path)
+    metadata.layout = "json"
+    log.info(
+        "MRF %s: %s (json layout, NPI=%s, EIN=%s, version=%s)",
+        metadata.source_file,
+        metadata.hospital_name,
+        metadata.primary_npi,
+        metadata.ein,
+        metadata.version,
+    )
+
+    def _iter() -> Iterator[ChargeRow]:
+        emitted = 0
+        with _open_binary(path) as fh:
+            for n_items, item in enumerate(
+                ijson.items(fh, "standard_charge_information.item"), start=1
+            ):
+                for charge in _json_item_rows(item):
+                    emitted += 1
+                    yield charge
+                if limit is not None and n_items >= limit:
+                    break
+        log.info("Parsed %d charge rows from %s", emitted, metadata.source_file)
+
+    return metadata, _iter()
+
+
+def _is_json_source(path: str) -> bool:
+    lower = path.lower()
+    if lower.endswith(".json"):
+        return True
+    if lower.endswith(".zip"):
+        with zipfile.ZipFile(path) as zf:
+            names = [n.lower() for n in zf.namelist()]
+        has_json = any(n.endswith(".json") for n in names)
+        has_csv = any(n.endswith(".csv") for n in names)
+        return has_json and not has_csv
+    return False
+
+
+def read_any(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator[ChargeRow]]:
+    """Read a price-transparency file, dispatching on CSV vs JSON layout."""
+
+    if _is_json_source(path):
+        return read_mrf_json(path, limit=limit)
+    return read_mrf(path, limit=limit)

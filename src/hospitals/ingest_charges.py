@@ -51,7 +51,7 @@ def ingest_charge_file(
     init_db(engine)
 
     log.info("Ingesting price transparency file: %s", path)
-    metadata_obj, charges = pt.read_mrf(path, limit=limit)
+    metadata_obj, charges = pt.read_any(path, limit=limit)
     loaded = load_charges(engine, metadata_obj, charges)
 
     return ChargeIngestSummary(
@@ -77,10 +77,10 @@ def ingest_charge_path(
         files = sorted(
             f
             for f in glob.glob(os.path.join(path, "*"))
-            if f.lower().endswith((".csv", ".zip"))
+            if f.lower().endswith((".csv", ".zip", ".json"))
         )
         if not files:
-            raise FileNotFoundError(f"no .csv/.zip files in directory: {path}")
+            raise FileNotFoundError(f"no .csv/.zip/.json files in directory: {path}")
     else:
         files = [path]
 

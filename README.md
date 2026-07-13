@@ -88,33 +88,38 @@ produce identical results.
 Since 2024, hospitals must publish a machine-readable "standard charges" file.
 Unlike POS, there is no single national feed — each hospital posts its own file
 on its website — so ingestion is **file-driven**: download the file(s) and
-point the tool at them.
+point the tool at them. These files are big (tens of MB to multiple GB) and
+live wherever you downloaded them, so **run the tool locally against your
+download folder** rather than moving the files around:
 
 ```bash
-# A single hospital's file (.csv or .zip)
-hospitals ingest-charges /path/to/520591656_hospital_standardcharges.csv
+# Ingest an entire folder of downloaded files (.csv, .zip, and .json)
+hospitals ingest-charges ~/Downloads/
 
-# A whole directory of downloaded files
-hospitals ingest-charges /path/to/mrf_downloads/
+# A single hospital's file
+hospitals ingest-charges ~/Downloads/520591656_the-johns-hopkins-hospital_standardcharges.csv
 
 # Smoke-test a very large file by capping items read
-hospitals ingest-charges /path/to/huge_hospital.zip --limit 1000
+hospitals ingest-charges ~/Downloads/410944601_mayo-clinic_standardcharges.csv --limit 1000
 ```
 
-The parser handles both physical layouts of the CMS v3.0 schema automatically:
+The parser handles all three physical layouts CMS allows, auto-detected:
 
-- **tall** — one row per item × payer × plan (`payer_name`/`plan_name` are
+- **tall CSV** — one row per item × payer × plan (`payer_name`/`plan_name` are
   columns).
-- **wide** — one row per item with each payer/plan spread across its own set of
-  columns (e.g. `standard_charge|AETNA [1003]|AETNA PPO [100307]|negotiated_dollar`).
+- **wide CSV** — one row per item with each payer/plan spread across its own set
+  of columns (e.g. `standard_charge|AETNA [1003]|AETNA PPO [100307]|negotiated_dollar`).
   These are unpivoted back into item × payer × plan rows.
+- **JSON** — the nested CMS JSON schema (`standard_charge_information[] ->
+  standard_charges[] -> payers_information[]`), streamed with `ijson`.
 
-Parsing is header-driven (column *order* varies between hospitals), and files
-are streamed — a `.zip` is read without extracting it, so a 340 MB file stays
-memory- and disk-friendly. Each file is keyed by its **EIN** (from the
-filename) and **organizational NPI** (from the metadata), which are the join
-keys back to the POS hospitals via an NPI↔CCN crosswalk (a planned step; the
-`charge_sources.ccn` column is reserved for it).
+Everything is **streamed** — CSVs row by row, a `.zip` read without extracting
+it, and JSON parsed iteratively — so a 340 MB (or multi-GB) file stays memory-
+and disk-friendly. Each file is keyed by its **EIN** (from the filename) and,
+for CSV files, its **organizational NPI** (from the metadata); these are the
+join keys back to the POS hospitals (see [linking](#linking-charges-to-pos-hospitals)).
+JSON files often omit the NPI, so they link by name + state or an EIN-based
+crosswalk.
 
 Re-ingesting the same file replaces its prior load (idempotent).
 
@@ -226,8 +231,9 @@ timestamps, and status.
 
 One row per ingested price transparency file. Hospital name/location/address,
 `ein`, `primary_npi` (+ all `npis`), `license_number`/`license_state`,
-`mrf_version`, `layout` (`tall`/`wide`), `last_updated_on`, `charge_count`, and
-`ccn`/`link_method` populated by the linker to bridge to POS `hospitals`.
+`mrf_version`, `layout` (`tall`/`wide`/`json`), `last_updated_on`,
+`charge_count`, and `ccn`/`link_method` populated by the linker to bridge to
+POS `hospitals`.
 
 ### `npi_ccn_crosswalk`
 
@@ -271,7 +277,7 @@ src/hospitals/
   ingest.py             POS orchestration: fetch -> filter -> normalize -> load
   cms_pos.py            CMS discovery + data-api / CSV / local-file fetching
   normalize.py          POS column mapping, identifier normalization, code lookups
-  price_transparency.py MRF parser: tall + wide v3.0 layouts, streamed
+  price_transparency.py MRF parser: tall + wide CSV and JSON layouts, streamed
   ingest_charges.py     charge-file orchestration (single file or directory)
   link.py               NPI->CCN crosswalk loader + charge<->hospital linker
   db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
@@ -281,10 +287,12 @@ tests/
   fixtures/pos_sample.csv        representative POS rows (synthetic)
   fixtures/mrf_tall_sample.csv   tall-layout standard charges (synthetic)
   fixtures/mrf_wide_sample.csv   wide-layout standard charges (synthetic)
+  fixtures/mrf_sample.json       JSON-layout standard charges (synthetic)
   test_normalize.py              identifier + code normalization
   test_cms_pos.py                discovery, pagination, CSV reading
   test_ingest.py                 POS end-to-end into SQLite
-  test_price_transparency.py     MRF parsing (tall + wide, unpivot)
+  test_price_transparency.py     MRF parsing (tall + wide CSV, unpivot)
+  test_price_transparency_json.py JSON MRF parsing + end-to-end
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking
 ```
@@ -309,8 +317,8 @@ MRF parser is tested on both tall and wide layouts including the wide unpivot.
 
 - [x] Kansas — CMS Provider of Services ingestion
 - [x] Maryland — same pipeline, `--state MD`
-- [x] Price transparency — CMS v3.0 standard charges (tall + wide), full
-      negotiated rates
+- [x] Price transparency — CMS standard charges (tall + wide CSV **and JSON**),
+      full negotiated rates, streamed
 - [x] NPI↔CCN crosswalk + linker to join `charge_sources` to POS `hospitals`
 - [ ] Enrich with additional CMS sources (Hospital General Information, NPPES)
 - [ ] Additional states / national coverage
