@@ -1,0 +1,250 @@
+{
+  "schema_version": "1.0",
+  "module": "MinervaAI AI Readiness",
+  "form_version": "A",
+  "response_scale": {
+    "type": "likert_5",
+    "labels": {
+      "1": "Never / strongly disagree",
+      "2": "Rarely / disagree",
+      "3": "Sometimes / neutral",
+      "4": "Often / agree",
+      "5": "Always / strongly agree"
+    },
+    "na_option": {
+      "enabled_for": ["D1.1", "D1.2", "D1.4", "D2.2", "D2.3", "D2.4", "D3.1", "D3.3", "D4.3"],
+      "handling": "exclude_from_mean"
+    }
+  },
+
+  "dimensions": [
+    { "id": "D1", "name": "Usage depth", "axis": "individual", "weight": 0.15, "prerequisite_rank": 4 },
+    { "id": "D2", "name": "Delegation maturity", "axis": "individual", "weight": 0.25, "prerequisite_rank": 3 },
+    { "id": "D3", "name": "Verification craft", "axis": "individual", "weight": 0.25, "prerequisite_rank": 2 },
+    { "id": "D4", "name": "Risk and data judgment", "axis": "individual", "weight": 0.20, "prerequisite_rank": 1 },
+    { "id": "D5", "name": "Change orientation", "axis": "individual", "weight": 0.15, "prerequisite_rank": 5 },
+    { "id": "D6", "name": "Organizational enablement", "axis": "organizational", "weight": 1.0, "prerequisite_rank": null }
+  ],
+
+  "items": [
+    { "id": "D1.1", "dimension": "D1", "type": "likert", "text": "In a typical work week, I use an approved AI tool to help with my actual job tasks." },
+    { "id": "D1.2", "dimension": "D1", "type": "likert", "text": "I use AI for more than one kind of task — for example drafting, summarizing, analyzing, and researching, rather than just one." },
+    { "id": "D1.3", "dimension": "D1", "type": "likert", "text": "I know which AI tools my organization has approved and what each one is meant for." },
+    { "id": "D1.4", "dimension": "D1", "type": "likert", "text": "When I hit a task that AI could help with, I think to reach for it." },
+
+    {
+      "id": "D2.1",
+      "dimension": "D2",
+      "type": "ladder",
+      "text": "Which best describes how you most often work with AI right now?",
+      "options": [
+        { "value": 1, "internal_label": "author", "text": "I produce the work myself and ask AI for small pieces — a sentence, a formula, a chart." },
+        { "value": 2, "internal_label": "editor", "text": "I set the direction, AI produces a first draft, and I edit and approve it." },
+        { "value": 3, "internal_label": "director", "text": "I write a clear spec and hand off a whole task for AI to complete, then I review the result." },
+        { "value": 4, "internal_label": "orchestrator", "text": "I design a workflow where several AI steps run in sequence or parallel, and I handle the exceptions." }
+      ],
+      "rescale": "1 + (raw - 1) * (4/3)"
+    },
+    { "id": "D2.2", "dimension": "D2", "type": "likert", "text": "I can tell in advance which parts of a task are safe to hand to AI and which need me." },
+    { "id": "D2.3", "dimension": "D2", "type": "likert", "text": "When I hand off work to AI, I write the instructions clearly enough that I rarely need to start over." },
+    { "id": "D2.4", "dimension": "D2", "type": "likert", "text": "I build human checkpoints into AI-assisted work on purpose, at the points where an error would matter most." },
+
+    { "id": "D3.1", "dimension": "D3", "type": "likert", "text": "I check AI output against a source before I use it in work that leaves my desk." },
+    { "id": "D3.2", "dimension": "D3", "type": "likert", "text": "I can usually tell when an AI answer is confident but wrong." },
+    { "id": "D3.3", "dimension": "D3", "type": "likert", "text": "I know which parts of my work sit outside what AI currently does well." },
+    {
+      "id": "D3.4",
+      "dimension": "D3",
+      "type": "scenario",
+      "text": "An AI tool summarizes a member appeal and cites a specific plan provision as the basis for denial. The citation looks plausible and the summary reads cleanly. Before you use this summary in your response, what do you do first?",
+      "options": [
+        { "key": "A", "text": "Use it — the summary is internally consistent.", "correct": false },
+        { "key": "B", "text": "Open the plan document and confirm the cited provision says what the summary claims.", "correct": true },
+        { "key": "C", "text": "Ask the AI tool whether it is confident in the citation.", "correct": false },
+        { "key": "D", "text": "Run the same prompt again and see whether you get the same answer.", "correct": false }
+      ]
+    },
+    {
+      "id": "D3.5",
+      "dimension": "D3",
+      "type": "scenario",
+      "text": "Which of these tasks is AI most likely to get wrong in a way that is hard to detect?",
+      "options": [
+        { "key": "A", "text": "Reformatting a table of claims data into a different layout.", "correct": false },
+        { "key": "B", "text": "Summarizing a document you have already read.", "correct": false },
+        { "key": "C", "text": "Reasoning about a novel edge case that combines several policies with no clear precedent.", "correct": true },
+        { "key": "D", "text": "Drafting a routine acknowledgment letter.", "correct": false }
+      ]
+    },
+
+    { "id": "D4.1", "dimension": "D4", "type": "likert", "text": "I know exactly what categories of information I am not allowed to put into an AI tool." },
+    { "id": "D4.2", "dimension": "D4", "type": "likert", "text": "I know where our acceptable-use policy for AI lives and when I last read it." },
+    { "id": "D4.3", "dimension": "D4", "type": "likert", "text": "I document when AI materially contributed to work that others rely on." },
+    {
+      "id": "D4.4",
+      "dimension": "D4",
+      "type": "scenario",
+      "text": "You want help drafting a response to a complex member case. Which is acceptable?",
+      "options": [
+        { "key": "A", "text": "Paste the member's full record into a personal AI account, since you will delete the chat afterward.", "correct": false },
+        { "key": "B", "text": "Use an organization-approved tool covered by a Business Associate Agreement, following your policy on what may be entered.", "correct": true },
+        { "key": "C", "text": "Replace the member's name with initials and paste the rest into any AI tool.", "correct": false },
+        { "key": "D", "text": "Ask a colleague to paste it in from their account instead.", "correct": false }
+      ]
+    },
+    {
+      "id": "D4.5",
+      "dimension": "D4",
+      "type": "scenario",
+      "text": "An AI tool you use daily produces an output that leads to a decision later found to be wrong. Who is accountable?",
+      "options": [
+        { "key": "A", "text": "The vendor who built the tool.", "correct": false },
+        { "key": "B", "text": "Nobody — the error was in the model.", "correct": false },
+        { "key": "C", "text": "You and your organization; the tool does not transfer accountability.", "correct": true },
+        { "key": "D", "text": "The IT department that approved the tool.", "correct": false }
+      ]
+    },
+
+    { "id": "D5.1", "dimension": "D5", "type": "likert", "text": "I am confident I can learn to use a new AI capability well when one arrives." },
+    { "id": "D5.2", "dimension": "D5", "type": "likert", "text": "I look for chances to redesign how my work gets done, rather than only doing it faster." },
+    { "id": "D5.3", "dimension": "D5", "type": "likert", "text": "When AI changes part of my job, I focus on what I can now do that I could not do before." },
+    { "id": "D5.4", "dimension": "D5", "type": "likert", "text": "I would be comfortable showing a colleague how I use AI in my work." },
+
+    { "id": "D6.1", "dimension": "D6", "type": "likert", "text": "I have access to the AI tools I need to do my job well." },
+    { "id": "D6.2", "dimension": "D6", "type": "likert", "text": "My manager visibly uses AI in their own work." },
+    { "id": "D6.3", "dimension": "D6", "type": "likert", "text": "I have been given time to learn and experiment with AI, not just told to use it." },
+    { "id": "D6.4", "dimension": "D6", "type": "likert", "text": "Leadership has been clear and consistent about what AI is for here." },
+    { "id": "D6.5", "dimension": "D6", "type": "likert", "text": "If I redesigned part of my work around AI and it did not pay off, that would be treated as learning rather than as a mistake." },
+    { "id": "D6.6", "dimension": "D6", "type": "likert", "text": "I know who to ask when I have a question about whether an AI use is allowed." }
+  ],
+
+  "scoring": {
+    "scenario_correct_value": 5,
+    "scenario_incorrect_value": 1,
+    "objective_blend": {
+      "D3": { "self_report_weight": 0.70, "objective_weight": 0.30, "objective_items": ["D3.4", "D3.5"] },
+      "D4": { "self_report_weight": 0.70, "objective_weight": 0.30, "objective_items": ["D4.4", "D4.5"] }
+    },
+    "normalize": "((raw - 1) / 4) * 100",
+    "ici_formula": "0.15*D1 + 0.25*D2 + 0.25*D3 + 0.20*D4 + 0.15*D5",
+    "oei_formula": "D6",
+    "thresholds": {
+      "ici_threshold": 60,
+      "oei_threshold": 60,
+      "calibration_note": "Replace both with pilot medians after 30-50 responses. Do not ship defaults."
+    },
+    "placement_matrix": {
+      "high_ici_high_oei": "frontier",
+      "high_ici_low_oei": "blocked_agency",
+      "low_ici_high_oei": "emergent",
+      "low_ici_low_oei": "early"
+    },
+    "gates": {
+      "governance_first": {
+        "condition": "D4 < 50",
+        "effects": ["cap_placement_at_emergent", "force_target_D4", "prepend_governance_actions"]
+      }
+    },
+    "insufficient_rule": "If more than half of a dimension's items are marked N/A, mark the dimension insufficient and exclude it from targeting."
+  },
+
+  "benchmarks": [
+    { "key": "frontier_share", "value": "19%", "population": "AI users, global", "source": "Microsoft Work Trend Index", "year": 2026 },
+    { "key": "emergent_share", "value": "~50%", "population": "AI users, global", "source": "Microsoft Work Trend Index", "year": 2026 },
+    { "key": "blocked_share", "value": "10%", "population": "AI users, global", "source": "Microsoft Work Trend Index", "year": 2026 },
+    { "key": "wti_sample", "value": "20,000 workers across 10 countries, fielded by Edelman Data x Intelligence", "population": "AI users", "source": "Microsoft Work Trend Index", "year": 2026 },
+    { "key": "feel_equipped", "value": "24%", "population": "Employees who use AI at work", "source": "Skillsoft Workforce Readiness Report: AI Edition", "year": 2026 },
+    { "key": "ai_usage", "value": "86%", "population": "Employees", "source": "Skillsoft Workforce Readiness Report: AI Edition", "year": 2026 },
+    { "key": "leader_employee_gap", "value": "53 points", "population": "Leader vs employee readiness perception", "source": "Skillsoft Workforce Readiness Report: AI Edition", "year": 2026 },
+    { "key": "org_ready", "value": "23%", "population": "Organizations, per senior leaders", "source": "Kyndryl People Readiness Report", "year": 2026 }
+  ],
+
+  "zone_config": {
+    "frontier": { "label": "Frontier", "employee_actions": 7, "manager_actions": 1, "emphasis": "Stretch up the delegation ladder, mentor a colleague, build outside-frontier judgment." },
+    "emergent": { "label": "Emergent", "employee_actions": 8, "manager_actions": 1, "emphasis": "Structured applied practice on real work, spaced across the quarter." },
+    "blocked_agency": { "label": "Blocked agency", "employee_actions": 3, "manager_actions": 6, "emphasis": "Escalation-weighted. The constraint is organizational, so most actions belong to the manager and leadership.", "auto_escalate_if": "team_share > 0.10" },
+    "early": { "label": "Early", "employee_actions": 5, "manager_actions": 4, "emphasis": "Foundations plus governance, paired with a champion. Secure minimum tool access first." }
+  },
+
+  "phases": [
+    { "key": "ground", "weeks": "1-4", "max_actions": 3, "shape": "one learning input, one if-then intention, one applied repetition" },
+    { "key": "apply", "weeks": "5-8", "max_actions": 3, "shape": "two applied repetitions at increasing difficulty, one peer touchpoint" },
+    { "key": "consolidate", "weeks": "9-12", "max_actions": 3, "shape": "one demonstration artifact, one teach-back, re-assessment booking" }
+  ],
+
+  "checkin_schedule_days": [3, 10, 24, 45, 75],
+
+  "action_library": [
+    { "id": "D1.A1", "dimension": "D1", "phase": "ground", "type": "learn", "owner": "employee", "zones": ["early", "emergent"], "title": "Map your approved tools to your actual tasks", "detail": "List your five most frequent work tasks. Next to each, write which approved tool could help and how. Confirm the tool list against current policy.", "effort_minutes": 30, "evidence_basis": "applied practice" },
+    { "id": "D1.A2", "dimension": "D1", "phase": "apply", "type": "practice", "owner": "employee", "zones": ["early", "emergent", "frontier"], "title": "Add one new task type per week", "detail": "Each week, use AI for a category you have not tried — analysis one week, research the next, drafting after that. Log what worked.", "effort_minutes": 60, "evidence_basis": "spaced practice; applied practice" },
+    { "id": "D1.A3", "dimension": "D1", "phase": "consolidate", "type": "social", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Share your three highest-value uses", "detail": "Write up the three uses that saved you the most time or improved quality, and post them where your team can find them.", "effort_minutes": 45, "evidence_basis": "teach-back; retrieval practice" },
+    { "id": "D1.M1", "dimension": "D1", "phase": "ground", "type": "escalate", "owner": "manager", "zones": ["early", "blocked_agency"], "title": "Confirm tool access", "detail": "Verify this person has licensed access to every approved tool relevant to their role, and resolve any gap within two weeks.", "effort_minutes": 20, "evidence_basis": "enablement precondition" },
+
+    { "id": "D2.A1", "dimension": "D2", "phase": "ground", "type": "learn", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Locate your frontier", "detail": "Pick one recurring task. Write down which sub-steps you would hand off entirely, which you would review, and which you would never delegate. Keep the list.", "effort_minutes": 30, "evidence_basis": "deliberate practice; frontier judgment" },
+    { "id": "D2.A2", "dimension": "D2", "phase": "apply", "type": "practice", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Move one task up a rung", "detail": "Take a task you currently do as Editor and run it as Director: write a full spec, hand off the whole task, then review. Note what the spec had to contain.", "effort_minutes": 90, "evidence_basis": "applied practice at increasing difficulty" },
+    { "id": "D2.A3", "dimension": "D2", "phase": "apply", "type": "verify", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Design your checkpoints on purpose", "detail": "For the task you moved up a rung, mark the two points where an undetected error would cost the most, and insert an explicit human check at each.", "effort_minutes": 30, "evidence_basis": "verification design" },
+    { "id": "D2.A4", "dimension": "D2", "phase": "consolidate", "type": "practice", "owner": "employee", "zones": ["frontier"], "title": "Chain two steps into a workflow", "detail": "Connect two AI-assisted steps so the output of one feeds the next, with an exception path you handle yourself. Document the design.", "effort_minutes": 120, "evidence_basis": "applied practice; orchestration" },
+
+    { "id": "D3.A1", "dimension": "D3", "phase": "ground", "type": "learn", "owner": "employee", "zones": ["early", "emergent", "frontier"], "title": "Write your verification rule", "detail": "Draft a one-sentence personal rule for when AI output must be source-checked before it leaves your desk. Post it where you work.", "effort_minutes": 15, "evidence_basis": "implementation intention" },
+    { "id": "D3.A2", "dimension": "D3", "phase": "apply", "type": "practice", "owner": "employee", "zones": ["early", "emergent", "frontier"], "title": "Source-check three outputs this week", "detail": "Pick three AI-assisted outputs headed for someone else's desk. For each, open the underlying source and confirm every factual claim and citation. Log what you find.", "effort_minutes": 45, "evidence_basis": "applied practice; retrieval practice" },
+    { "id": "D3.A3", "dimension": "D3", "phase": "apply", "type": "verify", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Red-team one output", "detail": "Take one AI output you would otherwise have used as-is and deliberately try to break it: find the weakest claim, the missing caveat, the unstated assumption.", "effort_minutes": 40, "evidence_basis": "critical appraisal" },
+    { "id": "D3.A4", "dimension": "D3", "phase": "consolidate", "type": "social", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Publish your error log", "detail": "Share, anonymized, the errors you caught this quarter and how you caught them. This is the single most useful artifact a team can have.", "effort_minutes": 60, "evidence_basis": "teach-back; organizational learning" },
+
+    { "id": "D4.A1", "dimension": "D4", "phase": "ground", "type": "governance", "owner": "employee", "zones": ["early", "emergent", "frontier", "blocked_agency"], "title": "Read the acceptable-use policy end to end", "detail": "Read the current policy in full and write down the three rules most likely to be broken by accident in your role.", "effort_minutes": 30, "evidence_basis": "mandatory governance", "rag_resolve": "policy_document" },
+    { "id": "D4.A2", "dimension": "D4", "phase": "ground", "type": "governance", "owner": "employee", "zones": ["early", "emergent", "frontier", "blocked_agency"], "title": "Confirm what may never be entered", "detail": "Write your own one-page list of information categories that must never go into an AI tool, and check it against policy with the person named as your governance contact.", "effort_minutes": 30, "evidence_basis": "mandatory governance" },
+    { "id": "D4.A3", "dimension": "D4", "phase": "apply", "type": "practice", "owner": "employee", "zones": ["early", "emergent", "frontier"], "title": "Run five judgment calls", "detail": "Over two weeks, log five moments where you decided whether an AI use was allowed. Note the call and the reason. Review the ambiguous ones with your governance contact.", "effort_minutes": 45, "evidence_basis": "spaced applied practice" },
+    { "id": "D4.A4", "dimension": "D4", "phase": "consolidate", "type": "practice", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Start documenting AI contribution", "detail": "For work others rely on, add a short standing note of where AI materially contributed and what you verified. Make it routine, not exceptional.", "effort_minutes": 20, "evidence_basis": "disclosure norms; professional credibility" },
+
+    { "id": "D5.A1", "dimension": "D5", "phase": "ground", "type": "practice", "owner": "employee", "zones": ["early", "emergent"], "title": "Bank one early win", "detail": "Pick the smallest task where AI would clearly help and complete it this week. Confidence follows evidence, and the evidence has to be yours.", "effort_minutes": 30, "evidence_basis": "self-efficacy through mastery experience" },
+    { "id": "D5.A2", "dimension": "D5", "phase": "apply", "type": "social", "owner": "employee", "zones": ["early", "emergent"], "title": "Watch someone else work", "detail": "Spend 30 minutes watching a colleague who uses AI well do it live. Ask what they check and when they stop trusting it.", "effort_minutes": 30, "evidence_basis": "vicarious learning; peer modeling" },
+    { "id": "D5.A3", "dimension": "D5", "phase": "consolidate", "type": "social", "owner": "employee", "zones": ["emergent", "frontier"], "title": "Teach one person", "detail": "Show a colleague one thing you now do differently. Teaching consolidates the skill and surfaces what you only half-understand.", "effort_minutes": 45, "evidence_basis": "teach-back; retrieval practice" },
+    { "id": "D5.A4", "dimension": "D5", "phase": "apply", "type": "practice", "owner": "employee", "zones": ["frontier"], "title": "Redesign, do not just accelerate", "detail": "Pick one recurring process and ask what it would look like if you designed it today knowing what AI can do. Propose the redesign.", "effort_minutes": 90, "evidence_basis": "work redesign" },
+
+    { "id": "D6.M1", "dimension": "D6", "phase": "ground", "type": "escalate", "owner": "manager", "zones": ["blocked_agency", "early"], "title": "Close the tool-access gap", "detail": "Identify every approved tool this person needs and does not have. Resolve or escalate with a named date.", "effort_minutes": 30, "evidence_basis": "enablement precondition" },
+    { "id": "D6.M2", "dimension": "D6", "phase": "ground", "type": "escalate", "owner": "manager", "zones": ["blocked_agency"], "title": "Protect learning time", "detail": "Block two hours per week of protected time for AI practice and defend it. Time is the constraint people name most and receive least.", "effort_minutes": 15, "evidence_basis": "spaced practice requires protected time" },
+    { "id": "D6.M3", "dimension": "D6", "phase": "apply", "type": "escalate", "owner": "manager", "zones": ["blocked_agency", "early", "emergent"], "title": "Use AI visibly yourself", "detail": "Show your own AI-assisted work in a team setting, including something that did not work. Manager modeling is one of the strongest enablement signals available.", "effort_minutes": 30, "evidence_basis": "manager modeling" },
+    { "id": "D6.M4", "dimension": "D6", "phase": "apply", "type": "escalate", "owner": "manager", "zones": ["blocked_agency"], "title": "State the experimentation norm out loud", "detail": "Tell the team explicitly that an AI-driven redesign that does not pay off will be treated as learning. Then hold to it the first time it happens.", "effort_minutes": 15, "evidence_basis": "psychological safety" },
+    { "id": "D6.L1", "dimension": "D6", "phase": "ground", "type": "escalate", "owner": "leadership", "zones": ["blocked_agency"], "title": "Resolve the tooling or BAA gap", "detail": "Where capable people are blocked by the absence of a covered, approved tool, that is a procurement and governance decision, not a training gap.", "effort_minutes": 60, "evidence_basis": "systems constraint" },
+    { "id": "D6.L2", "dimension": "D6", "phase": "apply", "type": "escalate", "owner": "leadership", "zones": ["blocked_agency", "early"], "title": "Publish a clear position on what AI is for here", "detail": "Ambiguity from the top reads as risk to everyone below it. State the intent, the boundaries, and the escalation path in one page.", "effort_minutes": 90, "evidence_basis": "leadership alignment" }
+  ],
+
+  "intention_seeds": {
+    "D1": [
+      { "when": "I start a draft of any document longer than one page", "will": "open an approved AI tool and ask it for a structure before I write" },
+      { "when": "I face a task I have not used AI for before", "will": "spend five minutes trying it with AI before doing it the old way" }
+    ],
+    "D2": [
+      { "when": "I am about to hand a task to AI", "will": "write the spec first, including what done looks like" },
+      { "when": "I design an AI-assisted workflow", "will": "mark the one point where a human must sign off before anything moves" }
+    ],
+    "D3": [
+      { "when": "an AI output contains a citation, a number, or a policy reference", "will": "open the source and confirm it before the work leaves my desk" },
+      { "when": "an AI answer sounds unusually confident on an unusual case", "will": "treat that as a signal to check rather than a signal to trust" }
+    ],
+    "D4": [
+      { "when": "I am about to paste anything into an AI tool", "will": "check whether it contains member or patient information first" },
+      { "when": "AI materially shapes work that someone else will rely on", "will": "note that contribution and what I verified" }
+    ],
+    "D5": [
+      { "when": "a new AI capability appears in a tool I use", "will": "spend fifteen minutes trying it on real work that week" },
+      { "when": "a colleague asks how I did something with AI", "will": "show them the actual steps rather than just describing it" }
+    ]
+  },
+
+  "construct_sources": [
+    { "instrument": "MAILS", "citation": "Carolus et al., 2023, Computers in Human Behavior: Artificial Humans", "used_for": "Use/understand/detect/evaluate/ethics construct structure and psychological meta-competencies" },
+    { "instrument": "MAILS short form", "citation": "Koch et al., 2024, Heliyon", "used_for": "Evidence that a 10-item form retains validity; supports short-form design" },
+    { "instrument": "SNAIL", "citation": "Laupichler et al., 2023", "used_for": "Technical understanding, critical appraisal, practical application" },
+    { "instrument": "AICOS", "citation": "arXiv:2503.12921", "used_for": "Rationale for objective MCQ measurement to reduce self-report bias" },
+    { "instrument": "Human-agent collaboration ladder", "citation": "Microsoft Work Trend Index, 2026", "used_for": "D2.1 Author / Editor / Director / Orchestrator ladder" },
+    { "instrument": "Implementation intentions", "citation": "Gollwitzer and Sheeran, 2006; Sheeran, Listrom, and Gollwitzer, 2024", "used_for": "If-then intention capture design" },
+    { "instrument": "Jagged frontier", "citation": "Dell'Acqua, McFowland, Mollick et al., 2023 (Organization Science, 2025)", "used_for": "Weighting of verification craft and delegation maturity" }
+  ],
+
+  "notes": [
+    "All item wording is original. Construct sources are cited but no verbatim items from published scales are reproduced.",
+    "Scenario items are written for a payer context. Build provider-side variants if the deployment population requires it.",
+    "Build parallel-form scenario items (D3.4b, D3.5b, D4.4b, D4.5b) before enabling day-90 re-assessment.",
+    "Actions carrying rag_resolve must be grounded in retrieved organizational documents. If retrieval returns nothing, the plan must say so rather than name an invented resource."
+  ]
+}
