@@ -47,8 +47,11 @@ def ingest_charge_file(
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    engine = engine or make_engine(database_url, echo=echo_sql)
-    init_db(engine)
+    # A caller running a batch has already created the schema; re-checking it
+    # per file adds a log line for every one of several hundred files.
+    if engine is None:
+        engine = make_engine(database_url, echo=echo_sql)
+        init_db(engine)
 
     log.info("Ingesting price transparency file: %s", path)
     metadata_obj, charges = pt.read_any(path, limit=limit)
