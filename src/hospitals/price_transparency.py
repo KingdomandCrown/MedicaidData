@@ -319,26 +319,66 @@ def _cell(row: Sequence[str], idx: dict[str, int], name: str):
     return row[i]
 
 
+# --- row sources ----------------------------------------------------------
+#
+# The tall/wide CSV logic is purely about the *rows*, so a spreadsheet is just a
+# different way of producing the same list-of-cells stream. Both sources yield
+# ``list[str]`` and a matching close function, and everything downstream is shared.
+
+
+def _csv_row_source(path: str):
+    stream_cm = open_mrf_text(path)
+    stream = stream_cm.__enter__()
+    return csv.reader(stream), lambda: stream_cm.__exit__(None, None, None)
+
+
+def _xlsx_row_source(path: str):
+    """Stream an .xlsx MRF as rows of strings (read-only, so large books stream)."""
+
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - dependency is declared
+        raise ValueError(
+            f"{path}: reading .xlsx needs openpyxl (pip install openpyxl)"
+        ) from exc
+
+    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheet = book[book.sheetnames[0]]
+
+    def rows():
+        for raw in sheet.iter_rows(values_only=True):
+            if raw is None:
+                continue
+            yield ["" if c is None else str(c) for c in raw]
+
+    return rows(), book.close
+
+
+def _row_source(path: str):
+    if path.lower().endswith((".xlsx", ".xlsm")):
+        return _xlsx_row_source(path)
+    return _csv_row_source(path)
+
+
 # --- top-level reader -----------------------------------------------------
 
 
 def read_mrf(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator[ChargeRow]]:
     """Open an MRF and return ``(metadata, charge_row_iterator)``.
 
-    ``limit`` caps the number of *items* (data rows) read, which is handy for
+    Reads ``.csv``, ``.zip`` (CSV inside), and ``.xlsx``/``.xlsm``. ``limit``
+    caps the number of *items* (data rows) read, which is handy for
     smoke-testing very large files.
     """
 
-    stream_cm = open_mrf_text(path)
-    stream = stream_cm.__enter__()
-    reader = csv.reader(stream)
+    reader, close = _row_source(path)
 
     try:
         meta_header = next(reader)
         meta_values = next(reader)
         data_header = next(reader)
     except StopIteration as exc:
-        stream_cm.__exit__(None, None, None)
+        close()
         raise ValueError(f"{path}: file ended before the data header") from exc
 
     metadata = parse_metadata(meta_header, meta_values)
@@ -377,7 +417,7 @@ def read_mrf(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator
                     break
             log.info("Parsed %d charge rows from %s", emitted, metadata.source_file)
         finally:
-            stream_cm.__exit__(None, None, None)
+            close()
 
     return metadata, _iter()
 
@@ -672,7 +712,7 @@ def _is_json_source(path: str) -> bool:
 
 
 def read_any(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator[ChargeRow]]:
-    """Read a price-transparency file, dispatching on CSV vs JSON layout."""
+    """Read a price-transparency file, dispatching on JSON vs CSV/XLSX layout."""
 
     if _is_json_source(path):
         return read_mrf_json(path, limit=limit)

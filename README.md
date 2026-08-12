@@ -93,7 +93,7 @@ live wherever you downloaded them, so **run the tool locally against your
 download folder** rather than moving the files around:
 
 ```bash
-# Ingest an entire folder of downloaded files (.csv, .zip, and .json)
+# Ingest an entire folder of downloaded files (.csv, .zip, .json, .xlsx)
 hospitals ingest-charges ~/Downloads/
 
 # A single hospital's file
@@ -103,7 +103,7 @@ hospitals ingest-charges ~/Downloads/520591656_the-johns-hopkins-hospital_standa
 hospitals ingest-charges ~/Downloads/410944601_mayo-clinic_standardcharges.csv --limit 1000
 ```
 
-The parser handles all three physical layouts CMS allows, auto-detected:
+The parser handles every physical layout CMS files arrive in, auto-detected:
 
 - **tall CSV** — one row per item × payer × plan (`payer_name`/`plan_name` are
   columns).
@@ -112,6 +112,9 @@ The parser handles all three physical layouts CMS allows, auto-detected:
   These are unpivoted back into item × payer × plan rows.
 - **JSON** — the nested CMS JSON schema (`standard_charge_information[] ->
   standard_charges[] -> payers_information[]`), streamed with `ijson`.
+- **XLSX** — the same tall/wide layouts shipped as a spreadsheet, read row by
+  row with `openpyxl` in read-only mode. A spreadsheet is just another way of
+  producing the same rows, so it shares the CSV layout logic exactly.
 
 Everything is **streamed** — CSVs row by row, a `.zip` read without extracting
 it, and JSON parsed iteratively — so a 340 MB (or multi-GB) file stays memory-
@@ -175,7 +178,7 @@ hospitals ingest [options]
   --echo-sql               Echo SQL statements (debugging)
 
 hospitals ingest-charges PATH [options]
-  PATH                     An MRF .csv/.zip, or a directory of them
+  PATH                     An MRF .csv/.zip/.json/.xlsx, or a directory of them
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Cap on items (data rows) read per file
   --echo-sql               Echo SQL statements (debugging)
@@ -288,11 +291,13 @@ tests/
   fixtures/mrf_tall_sample.csv   tall-layout standard charges (synthetic)
   fixtures/mrf_wide_sample.csv   wide-layout standard charges (synthetic)
   fixtures/mrf_sample.json       JSON-layout standard charges (synthetic)
+  fixtures/mrf_tall_sample.xlsx  tall layout as a spreadsheet (synthetic)
   test_normalize.py              identifier + code normalization
   test_cms_pos.py                discovery, pagination, CSV reading
   test_ingest.py                 POS end-to-end into SQLite
   test_price_transparency.py     MRF parsing (tall + wide CSV, unpivot)
   test_price_transparency_json.py JSON MRF parsing + end-to-end
+  test_price_transparency_xlsx.py XLSX parsing, CSV parity, mixed-folder ingest
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking
 ```
@@ -317,8 +322,8 @@ MRF parser is tested on both tall and wide layouts including the wide unpivot.
 
 - [x] Kansas — CMS Provider of Services ingestion
 - [x] Maryland — same pipeline, `--state MD`
-- [x] Price transparency — CMS standard charges (tall + wide CSV **and JSON**),
-      full negotiated rates, streamed
+- [x] Price transparency — CMS standard charges (tall + wide CSV, **JSON**, and
+      **XLSX**), full negotiated rates, streamed
 - [x] NPI↔CCN crosswalk + linker to join `charge_sources` to POS `hospitals`
 - [ ] Enrich with additional CMS sources (Hospital General Information, NPPES)
 - [ ] Additional states / national coverage

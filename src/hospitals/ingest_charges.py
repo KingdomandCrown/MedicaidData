@@ -77,10 +77,10 @@ def ingest_charge_path(
         files = sorted(
             f
             for f in glob.glob(os.path.join(path, "*"))
-            if f.lower().endswith((".csv", ".zip", ".json"))
+            if f.lower().endswith((".csv", ".zip", ".json", ".xlsx", ".xlsm"))
         )
         if not files:
-            raise FileNotFoundError(f"no .csv/.zip/.json files in directory: {path}")
+            raise FileNotFoundError(f"no .csv/.zip/.json/.xlsx files in directory: {path}")
     else:
         files = [path]
 
