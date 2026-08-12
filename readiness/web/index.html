@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Readiness · MinervaAI</title>
+<style>
+  /* ---- tokens -----------------------------------------------------------
+     Palette derived from the MinervaAI mark: engraved gold on a deep,
+     near-black ground, with a warm light ground for the reading surface.
+     Swap these values to retheme; nothing below hardcodes a color.        */
+  :root {
+    --gold:        #9a7115;
+    --gold-mark:   #c9a227;
+    --gold-hi:     #e3c55f;
+    --gold-soft:   #f0e6cb;
+    --ground:      #faf7f0;
+    --surface:     #fffdf8;
+    --ink:         #1e2027;
+    --ink-soft:    #5d5847;
+    --ink-faint:   #948b74;
+    --line:        #e6ddc8;
+    --deep:        #12141a;
+    --good:        #2f6b4f;
+    --warn:        #8a6d1f;
+    --alert:       #7c2214;
+    --focus:       #2f6b9a;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --shadow: 0 1px 2px rgba(30,32,39,.05), 0 10px 30px rgba(30,32,39,.07);
+    --maxw: 760px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --gold:#d9b45c; --gold-mark:#c9a227; --gold-hi:#f0d98c; --gold-soft:#2b2517;
+      --ground:#12141a; --surface:#1a1d25; --ink:#f2ecdd; --ink-soft:#b3a98e;
+      --ink-faint:#82795f; --line:#2e3140; --deep:#0b0d12;
+      --good:#6fbf95; --warn:#d9b45c; --alert:#e08979; --focus:#7fb3dd;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 12px 34px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+      --gold:#d9b45c; --gold-mark:#c9a227; --gold-hi:#f0d98c; --gold-soft:#2b2517;
+      --ground:#12141a; --surface:#1a1d25; --ink:#f2ecdd; --ink-soft:#b3a98e;
+      --ink-faint:#82795f; --line:#2e3140; --deep:#0b0d12;
+      --good:#6fbf95; --warn:#d9b45c; --alert:#e08979; --focus:#7fb3dd;
+      --shadow: 0 1px 2px rgba(0,0,0,.35), 0 12px 34px rgba(0,0,0,.4);
+  }
+  :root[data-theme="light"] {
+      --gold:#9a7115; --gold-mark:#c9a227; --gold-hi:#e3c55f; --gold-soft:#f0e6cb;
+      --ground:#faf7f0; --surface:#fffdf8; --ink:#1e2027; --ink-soft:#5d5847;
+      --ink-faint:#948b74; --line:#e6ddc8; --deep:#12141a;
+      --good:#2f6b4f; --warn:#8a6d1f; --alert:#7c2214; --focus:#2f6b9a;
+      --shadow: 0 1px 2px rgba(30,32,39,.05), 0 10px 30px rgba(30,32,39,.07);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 28px 20px 40px; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  h1, h2, .display { font-family: var(--serif); font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+  h1 { font-size: 27px; margin: 0 0 10px; }
+  h2 { font-size: 21px; margin: 0 0 6px; }
+  p { margin: 0 0 14px; }
+  .lede { color: var(--ink-soft); }
+  .eyebrow {
+    font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--gold); margin: 0 0 8px;
+  }
+  .muted { color: var(--ink-faint); font-size: 13px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 26px;
+  }
+
+  /* ---- buttons ---- */
+  .btn {
+    font: inherit; font-weight: 600; cursor: pointer; border-radius: 8px;
+    padding: 11px 20px; border: 1px solid transparent; background: var(--gold); color: #fff;
+  }
+  :root[data-theme="dark"] .btn, @media (prefers-color-scheme: dark) { }
+  .btn:hover { filter: brightness(1.07); }
+  .btn[disabled] { opacity: .4; cursor: not-allowed; filter: none; }
+  .btn.ghost { background: transparent; color: var(--ink-soft); border-color: var(--line); }
+  .btn.ghost:hover { border-color: var(--gold); color: var(--gold); filter: none; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; }
+
+  /* ---- progress ---- */
+  .prog { margin-bottom: 22px; }
+  .prog .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .prog .fill { height: 100%; background: var(--gold); border-radius: 3px; transition: width .35s ease; }
+  .prog .meta { display: flex; justify-content: space-between; font-size: 12px;
+    color: var(--ink-faint); margin-top: 7px; }
+
+  /* ---- items ---- */
+  .item { padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .item:last-of-type { border-bottom: 0; }
+  .item .qtext { margin: 0 0 12px; }
+  .scale { display: flex; gap: 6px; flex-wrap: wrap; }
+  .opt {
+    flex: 1 1 0; min-width: 92px; text-align: center; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 6px;
+    background: var(--surface); font-size: 12.5px; color: var(--ink-soft);
+    display: flex; flex-direction: column; gap: 3px; align-items: center;
+    transition: border-color .12s, background .12s;
+  }
+  .opt .n { font-weight: 700; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .opt:hover { border-color: var(--gold); }
+  .opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .opt.sel { border-color: var(--gold); background: var(--gold-soft); }
+  .opt.sel .n { color: var(--gold); }
+  .opt.na { flex: 0 0 auto; min-width: 132px; }
+
+  /* choice-style items (ladder + scenario) */
+  .choices { display: flex; flex-direction: column; gap: 8px; }
+  .choice {
+    display: flex; gap: 11px; align-items: flex-start; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 9px; padding: 13px 15px;
+    background: var(--surface); transition: border-color .12s, background .12s;
+  }
+  .choice:hover { border-color: var(--gold); }
+  .choice.sel { border-color: var(--gold); background: var(--gold-soft); }
+  .choice input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .choice .dot {
+    flex: 0 0 auto; width: 17px; height: 17px; border-radius: 50%; margin-top: 2px;
+    border: 2px solid var(--ink-faint); background: transparent; position: relative;
+  }
+  .choice.sel .dot { border-color: var(--gold); }
+  .choice.sel .dot::after {
+    content:""; position:absolute; inset:3px; border-radius:50%; background: var(--gold);
+  }
+  .optional { font-size: 12px; color: var(--ink-faint); margin-top: 8px; }
+
+  /* ---- results ---- */
+  .zone { font-family: var(--serif); font-size: 34px; margin: 6px 0 4px; }
+  .zone.frontier { color: var(--good); }
+  .zone.emergent { color: var(--warn); }
+  .zone.blocked_agency { color: var(--gold); }
+  .zone.early { color: var(--ink-soft); }
+  .plot-wrap { margin: 8px 0 4px; }
+  svg { max-width: 100%; height: auto; display: block; }
+  .gate {
+    border-left: 3px solid var(--alert); background: color-mix(in srgb, var(--alert) 7%, transparent);
+    padding: 13px 16px; border-radius: 0 8px 8px 0; margin: 16px 0;
+  }
+  .gate strong { color: var(--alert); }
+  .dims { display: grid; gap: 9px; margin-top: 4px; }
+  .dimrow { display: grid; grid-template-columns: 190px 1fr 52px; gap: 12px; align-items: center; }
+  .dimrow .nm { font-size: 13px; font-weight: 600; }
+  .dimrow .track { height: 15px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .dimrow .fv { height: 100%; background: var(--gold); border-radius: 4px; transition: width .6s ease; }
+  .dimrow .fv.low { background: var(--alert); }
+  .dimrow .val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; }
+  .bm { display: grid; gap: 10px; margin-top: 6px; }
+  .bmrow { display: grid; grid-template-columns: 1fr auto; gap: 10px; font-size: 13px;
+    padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+  .bmrow:last-child { border-bottom: 0; }
+  .bmrow .src { color: var(--ink-faint); font-size: 11.5px; }
+  .bmrow .fig { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--gold); }
+
+  .notice { font-size: 12.5px; color: var(--ink-faint); border-top: 1px solid var(--line);
+    margin-top: 22px; padding-top: 14px; }
+
+  /* ---- brand mark: real asset only, never a redraw ---- */
+  .mark { text-align: center; margin: 30px 0 6px; }
+  .mark img { width: 74px; height: auto; opacity: .95; }
+  .mark .fallback {
+    font-family: var(--serif); font-size: 13px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--gold);
+  }
+  .stack > * + * { margin-top: 22px; }
+  .hidden { display: none !important; }
+
+  @media (max-width: 620px) {
+    .dimrow { grid-template-columns: 128px 1fr 44px; }
+    .opt { min-width: 74px; font-size: 11.5px; }
+    h1 { font-size: 23px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ 1 · welcome + consent ============ -->
+  <section id="s-welcome">
+    <p class="eyebrow">MinervaAI · AI Readiness</p>
+    <h1>Where you stand with AI, and what to do next</h1>
+    <div class="card stack">
+      <div>
+        <p>This takes about <strong>seven to nine minutes</strong>. You will answer 28 questions
+           about how you work with AI today. At the end you will see where you stand,
+           how that compares to published benchmarks, and the dimensions worth working on.</p>
+      </div>
+      <div>
+        <h2>What this is not</h2>
+        <p class="lede">This is a <strong>developmental</strong> instrument. It is not a performance
+           review, not a selection tool, and not a record for employment decisions. Your results
+           may not be used for hiring, promotion, compensation, or termination.</p>
+        <p class="lede">Your individual results are yours. A manager sees only aggregates, and only
+           once enough people have completed it that no one is identifiable. Individual results
+           reach a manager only if you explicitly release them, and you can revoke that.</p>
+        <p class="lede">Answer honestly rather than aspirationally — the plan you get is only as
+           useful as the picture you give it. Do not enter patient, member, or otherwise
+           protected information anywhere in this assessment.</p>
+      </div>
+      <label class="choice" id="consent-wrap">
+        <input type="checkbox" id="consent">
+        <span class="dot" aria-hidden="true"></span>
+        <span>I understand how my results will and will not be used, and I am ready to begin.</span>
+      </label>
+      <div class="row">
+        <button class="btn" id="start" disabled>Begin assessment</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2 · assessment ============ -->
+  <section id="s-assess" class="hidden">
+    <div class="prog">
+      <div class="bar"><div class="fill" id="prog-fill" style="width:0%"></div></div>
+      <div class="meta">
+        <span id="prog-label">Section 1 of 6</span>
+        <span id="prog-count">0 of 28 answered</span>
+      </div>
+    </div>
+    <p class="eyebrow" id="dim-eyebrow">Usage depth</p>
+    <h1 id="dim-title">Usage depth</h1>
+    <p class="lede" id="dim-help"></p>
+    <div class="card"><div id="items"></div></div>
+    <div class="row between" style="margin-top:18px;">
+      <button class="btn ghost" id="back">Back</button>
+      <button class="btn" id="next">Continue</button>
+    </div>
+    <p class="optional" id="skip-note"></p>
+  </section>
+
+  <!-- ============ 3 · processing ============ -->
+  <section id="s-processing" class="hidden">
+    <div class="card">
+      <p class="eyebrow">Scoring</p>
+      <h1 id="proc-text">Scoring your responses…</h1>
+      <p class="lede">Your answers are being scored locally against the readiness model.</p>
+    </div>
+  </section>
+
+  <!-- ============ 4-6 · results ============ -->
+  <section id="s-results" class="hidden">
+    <p class="eyebrow">Your result</p>
+    <h1 id="res-head">Where you stand</h1>
+
+    <div class="card stack">
+      <div>
+        <p class="muted" style="margin:0">Placement</p>
+        <div class="zone" id="zone-name">—</div>
+        <p class="lede" id="zone-line"></p>
+      </div>
+      <div id="gate-box" class="gate hidden">
+        <strong>Governance first.</strong>
+        <span id="gate-text"></span>
+      </div>
+      <div class="plot-wrap">
+        <svg id="plot" viewBox="0 0 520 380" role="img" aria-labelledby="plot-title plot-desc">
+          <title id="plot-title">Placement plot</title>
+          <desc id="plot-desc">Individual capability on the horizontal axis against organizational
+            enablement on the vertical axis, with your position marked.</desc>
+        </svg>
+      </div>
+    </div>
+
+    <div class="card stack" style="margin-top:22px;">
+      <div>
+        <h2>What drives that placement</h2>
+        <p class="muted" style="margin:0 0 14px">Each dimension scored 0–100.</p>
+        <div class="dims" id="dims"></div>
+      </div>
+      <div id="targets-box">
+        <h2>Where to focus</h2>
+        <p class="lede" id="targets-line"></p>
+      </div>
+    </div>
+
+    <div class="card stack" style="margin-top:22px;">
+      <h2>For reference</h2>
+      <div class="bm" id="bm"></div>
+      <p class="muted" style="margin:0">Reference figures come from different samples and methods.
+        They are directional, not population parameters for your organization.</p>
+    </div>
+
+    <div class="notice">
+      <p style="margin:0 0 8px"><strong>A reminder about these results.</strong> This measures
+        readiness, not performance, and the two are not the same thing. Self-assessed AI skill is
+        systematically miscalibrated; the scenario questions correct for some of that but not all
+        of it. These results may not be used for any employment decision.</p>
+      <p style="margin:0" id="threshold-note"></p>
+    </div>
+
+    <div class="row" style="margin-top:20px;">
+      <button class="btn ghost" id="restart">Start over</button>
+    </div>
+  </section>
+
+  <!-- The real MinervaAI mark. Drop the asset at assets/minerva-mark.png;
+       the wordmark below shows only until it is present. Never substitute a
+       redrawn or generated owl. -->
+  <div class="mark">
+    <img id="mark-img" src="assets/minerva-mark.png" alt="MinervaAI" hidden>
+    <div class="fallback" id="mark-fallback">Minerva AI</div>
+  </div>
+</div>
+
+<script src="../scoring.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var CONTENT_URL = "../minerva_readiness_content.provider.json";
+  var content = null, responses = {}, dimIndex = 0, order = [];
+
+  var DIM_HELP = {
+    D1: "How much, and how widely, you already use AI in your actual work.",
+    D2: "How you divide work between yourself and AI — and where you keep control.",
+    D3: "How you check AI output, and how well you know where it fails.",
+    D4: "What you know about handling information and accountability.",
+    D5: "How you approach change as the tools keep moving.",
+    D6: "What your organization does — or does not do — to make this possible. These answers are about your setup, not about you."
+  };
+  var ZONE_LINE = {
+    frontier: "You are working capably with AI in an environment that supports it. The work now is depth, not catch-up.",
+    blocked_agency: "Your capability is ahead of what your current setup lets you use. The constraint here is organizational, not personal.",
+    emergent: "The support is there and the ground is set. What is missing is structured practice on real work.",
+    early: "Early days on both sides. Foundations and basic access come before anything else."
+  };
+
+  // --- brand mark: only show the real asset -------------------------------
+  var img = document.getElementById("mark-img"), fb = document.getElementById("mark-fallback");
+  img.addEventListener("load", function () { img.hidden = false; fb.style.display = "none"; });
+  img.addEventListener("error", function () { img.remove(); });
+
+  // --- helpers ------------------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function show(id) {
+    ["s-welcome","s-assess","s-processing","s-results"].forEach(function (s) {
+      $(s).classList.toggle("hidden", s !== id);
+    });
+    window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+  }
+  function naAllowed(itemId) {
+    var na = content.response_scale.na_option.enabled_for || [];
+    return na.indexOf(itemId) >= 0;
+  }
+  function itemsFor(dimId) {
+    return content.items.filter(function (i) { return i.dimension === dimId; });
+  }
+  function answeredCount() {
+    return Object.keys(responses).filter(function (k) {
+      var r = responses[k]; return r && (r.na === true || r.value !== undefined);
+    }).length;
+  }
+
+  // --- render one dimension screen ----------------------------------------
+  function renderDim() {
+    var dim = order[dimIndex];
+    var items = itemsFor(dim.id);
+    $("dim-eyebrow").textContent = "Section " + (dimIndex + 1) + " · " + dim.name;
+    $("dim-title").textContent = dim.name;
+    $("dim-help").textContent = DIM_HELP[dim.id] || "";
+    $("prog-label").textContent = "Section " + (dimIndex + 1) + " of " + order.length;
+    $("prog-count").textContent = answeredCount() + " of " + content.items.length + " answered";
+    $("prog-fill").style.width = ((dimIndex) / order.length * 100) + "%";
+    $("back").disabled = dimIndex === 0;
+    $("next").textContent = dimIndex === order.length - 1 ? "See my result" : "Continue";
+
+    var labels = content.response_scale.labels;
+    var host = $("items");
+    host.innerHTML = "";
+
+    items.forEach(function (item) {
+      var wrap = document.createElement("div");
+      wrap.className = "item";
+
+      var q = document.createElement("p");
+      q.className = "qtext";
+      q.textContent = item.text;
+      wrap.appendChild(q);
+
+      if (item.type === "likert") {
+        var scale = document.createElement("div");
+        scale.className = "scale";
+        scale.setAttribute("role", "radiogroup");
+        scale.setAttribute("aria-label", item.text);
+        [1,2,3,4,5].forEach(function (v) {
+          scale.appendChild(makeOpt(item, v, String(v), labels[String(v)]));
+        });
+        if (naAllowed(item.id)) scale.appendChild(makeNa(item));
+        wrap.appendChild(scale);
+      } else {
+        var ch = document.createElement("div");
+        ch.className = "choices";
+        ch.setAttribute("role", "radiogroup");
+        ch.setAttribute("aria-label", item.text);
+        (item.options || []).forEach(function (o) {
+          var val = item.type === "ladder" ? o.value : o.key;
+          ch.appendChild(makeChoice(item, val, o.text));
+        });
+        wrap.appendChild(ch);
+        if (item.type === "scenario") {
+          var note = document.createElement("p");
+          note.className = "optional";
+          note.textContent = "You may continue without answering this one.";
+          wrap.appendChild(note);
+        }
+      }
+      host.appendChild(wrap);
+    });
+
+    var hasScenario = items.some(function (i) { return i.type === "scenario"; });
+    $("skip-note").textContent = hasScenario
+      ? "Scenario questions are optional. Everything else on this screen is needed to score the section."
+      : "";
+    updateNext();
+  }
+
+  function makeOpt(item, value, big, label) {
+    var el = document.createElement("label");
+    el.className = "opt";
+    var r = responses[item.id];
+    if (r && r.na !== true && Number(r.value) === value) el.className += " sel";
+    el.innerHTML = '<span class="n">' + big + '</span><span>' + label + "</span>";
+    var input = document.createElement("input");
+    input.type = "radio"; input.name = item.id; input.value = String(value);
+    input.checked = !!(r && r.na !== true && Number(r.value) === value);
+    input.addEventListener("change", function () {
+      responses[item.id] = { value: value, na: false };
+      markSelected(el);
+    });
+    el.insertBefore(input, el.firstChild);
+    return el;
+  }
+  function makeNa(item) {
+    var el = document.createElement("label");
+    el.className = "opt na";
+    var r = responses[item.id];
+    if (r && r.na === true) el.className += " sel";
+    el.innerHTML = '<span class="n">—</span><span>Not applicable to my role</span>';
+    var input = document.createElement("input");
+    input.type = "radio"; input.name = item.id; input.value = "na";
+    input.checked = !!(r && r.na === true);
+    input.addEventListener("change", function () {
+      responses[item.id] = { value: null, na: true };
+      markSelected(el);
+    });
+    el.insertBefore(input, el.firstChild);
+    return el;
+  }
+  function makeChoice(item, value, text) {
+    var el = document.createElement("label");
+    el.className = "choice";
+    var r = responses[item.id];
+    if (r && String(r.value) === String(value)) el.className += " sel";
+    var input = document.createElement("input");
+    input.type = "radio"; input.name = item.id; input.value = String(value);
+    input.checked = !!(r && String(r.value) === String(value));
+    input.addEventListener("change", function () {
+      responses[item.id] = { value: value, na: false };
+      markSelected(el);
+    });
+    el.appendChild(input);
+    var dot = document.createElement("span"); dot.className = "dot"; dot.setAttribute("aria-hidden","true");
+    el.appendChild(dot);
+    var t = document.createElement("span"); t.textContent = text;
+    el.appendChild(t);
+    return el;
+  }
+  /* Update selection in place rather than re-rendering the screen: a full
+     re-render would destroy keyboard focus and scroll position mid-answer. */
+  function markSelected(labelEl) {
+    var group = labelEl.parentNode;
+    Array.prototype.forEach.call(group.children, function (sib) {
+      sib.classList.toggle("sel", sib === labelEl);
+    });
+    $("prog-count").textContent = answeredCount() + " of " + content.items.length + " answered";
+    updateNext();
+  }
+
+  // Required = every non-scenario item on this screen (scenarios are optional).
+  function updateNext() {
+    var items = itemsFor(order[dimIndex].id).filter(function (i) { return i.type !== "scenario"; });
+    var done = items.every(function (i) {
+      var r = responses[i.id]; return r && (r.na === true || r.value !== undefined && r.value !== null);
+    });
+    $("next").disabled = !done;
+  }
+
+  // --- results -------------------------------------------------------------
+  function renderResults(res) {
+    var zoneKey = res.placement || "early";
+    var label = (content.zone_config[zoneKey] || {}).label || zoneKey;
+    $("zone-name").textContent = label;
+    $("zone-name").className = "zone " + zoneKey;
+    $("zone-line").textContent = ZONE_LINE[zoneKey] || "";
+
+    if (res.gates && res.gates.governance_first) {
+      $("gate-box").classList.remove("hidden");
+      $("gate-text").textContent =
+        "Your risk and data judgment scored below the safety floor, so that comes first in any plan" +
+        (res.placement_ungated === "frontier"
+          ? " — and this result is shown one level below where the raw scores alone would put it."
+          : ".") +
+        " In a regulated setting, delegating confidently without that judgment is exposure, not maturity.";
+    } else {
+      $("gate-box").classList.add("hidden");
+    }
+
+    drawPlot(res);
+
+    var host = $("dims"); host.innerHTML = "";
+    content.dimensions.forEach(function (d) {
+      var s = res.dimensions[d.id];
+      var row = document.createElement("div"); row.className = "dimrow";
+      var insufficient = res.insufficient.indexOf(d.id) >= 0;
+      row.innerHTML =
+        '<div class="nm">' + d.name + (d.axis === "organizational" ? " <span class=\"muted\">(your setup)</span>" : "") + "</div>" +
+        '<div class="track"><div class="fv' + (s !== null && s < 50 ? " low" : "") + '" style="width:' + (s === null ? 0 : s) + '%"></div></div>' +
+        '<div class="val">' + (insufficient || s === null ? "n/a" : s) + "</div>";
+      host.appendChild(row);
+    });
+
+    var names = {};
+    content.dimensions.forEach(function (d) { names[d.id] = d.name; });
+    $("targets-line").textContent = res.targets.length
+      ? "Start with " + res.targets.map(function (t) { return names[t]; }).join(", then ") +
+        ". Two at a time — more than that is a curriculum, and curricula do not get finished."
+      : "Not enough answered to target a dimension.";
+
+    var bm = $("bm"); bm.innerHTML = "";
+    (content.benchmarks || []).filter(function (b) {
+      return ["frontier_share","emergent_share","blocked_share","feel_equipped","org_ready"].indexOf(b.key) >= 0;
+    }).forEach(function (b) {
+      var r = document.createElement("div"); r.className = "bmrow";
+      r.innerHTML = "<div>" + describeBenchmark(b) +
+        '<div class="src">' + b.population + " · " + b.source + ", " + b.year + "</div></div>" +
+        '<div class="fig">' + b.value + "</div>";
+      bm.appendChild(r);
+    });
+
+    var th = res.thresholds;
+    $("threshold-note").textContent =
+      "Placement thresholds are currently set at " + th.ici + " and " + th.oei +
+      ". These are provisional defaults, not calibrated against your organization; " +
+      "they are due to be replaced with pilot medians.";
+    show("s-results");
+  }
+
+  function describeBenchmark(b) {
+    var m = {
+      frontier_share: "Share of AI users placing in the Frontier zone",
+      emergent_share: "Share placing in the Emergent zone",
+      blocked_share: "Share whose capability is ahead of their setup",
+      feel_equipped: "Employees using AI who feel fully equipped",
+      org_ready: "Organizations their own leaders call ready"
+    };
+    return m[b.key] || b.key;
+  }
+
+  // --- placement plot ------------------------------------------------------
+  function drawPlot(res) {
+    var svg = $("plot");
+    var W = 520, H = 380, P = 46;
+    var x0 = P, x1 = W - 20, y0 = H - P, y1 = 18;
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var ns = "http://www.w3.org/2000/svg";
+    while (svg.childNodes.length > 2) svg.removeChild(svg.lastChild);
+
+    function el(n, a) {
+      var e = document.createElementNS(ns, n);
+      Object.keys(a).forEach(function (k) { e.setAttribute(k, a[k]); });
+      return e;
+    }
+    function px(v) { return x0 + (v / 100) * (x1 - x0); }
+    function py(v) { return y0 - (v / 100) * (y0 - y1); }
+
+    var ti = res.thresholds.ici, to = res.thresholds.oei;
+
+    // quadrant tints
+    var quads = [
+      { x: px(ti), y: y1, w: x1 - px(ti), h: py(to) - y1, k: "frontier" },
+      { x: px(ti), y: py(to), w: x1 - px(ti), h: y0 - py(to), k: "blocked_agency" },
+      { x: x0, y: y1, w: px(ti) - x0, h: py(to) - y1, k: "emergent" },
+      { x: x0, y: py(to), w: px(ti) - x0, h: y0 - py(to), k: "early" }
+    ];
+    quads.forEach(function (q) {
+      var on = res.placement === q.k;
+      svg.appendChild(el("rect", {
+        x: q.x, y: q.y, width: Math.max(0, q.w), height: Math.max(0, q.h),
+        fill: on ? "var(--gold-soft)" : "transparent",
+        stroke: "var(--line)", "stroke-width": 1
+      }));
+      var lbl = (content.zone_config[q.k] || {}).label || q.k;
+      svg.appendChild(el("text", {
+        x: q.x + q.w / 2, y: q.y + 18, "text-anchor": "middle",
+        "font-size": 11, "font-weight": on ? 700 : 400,
+        fill: on ? "var(--gold)" : "var(--ink-faint)",
+        "font-family": "var(--sans)"
+      })).textContent = lbl;
+    });
+
+    // axes
+    svg.appendChild(el("line", { x1: x0, y1: y0, x2: x1, y2: y0, stroke: "var(--ink-faint)", "stroke-width": 1.5 }));
+    svg.appendChild(el("line", { x1: x0, y1: y0, x2: x0, y2: y1, stroke: "var(--ink-faint)", "stroke-width": 1.5 }));
+    svg.appendChild(el("text", {
+      x: (x0 + x1) / 2, y: H - 10, "text-anchor": "middle", "font-size": 11.5,
+      fill: "var(--ink-soft)", "font-family": "var(--sans)"
+    })).textContent = "Your capability →";
+    var yl = el("text", {
+      x: 14, y: (y0 + y1) / 2, "text-anchor": "middle", "font-size": 11.5,
+      fill: "var(--ink-soft)", "font-family": "var(--sans)",
+      transform: "rotate(-90 14 " + ((y0 + y1) / 2) + ")"
+    });
+    yl.textContent = "Your organization's support →";
+    svg.appendChild(yl);
+
+    // marker
+    if (res.ici !== null && res.oei !== null) {
+      var cx = px(res.ici), cy = py(res.oei);
+      var halo = el("circle", { cx: cx, cy: cy, r: 13, fill: "var(--gold)", opacity: .18 });
+      var dot = el("circle", { cx: cx, cy: cy, r: 7, fill: "var(--gold)", stroke: "var(--surface)", "stroke-width": 2.5 });
+      svg.appendChild(halo); svg.appendChild(dot);
+      var tag = el("text", {
+        x: cx, y: cy - 20, "text-anchor": "middle", "font-size": 12, "font-weight": 700,
+        fill: "var(--gold)", "font-family": "var(--sans)"
+      });
+      tag.textContent = "you";
+      svg.appendChild(tag);
+      if (!reduce) {
+        [halo, dot, tag].forEach(function (n) {
+          n.style.opacity = n === halo ? "0" : "0";
+          n.style.transition = "opacity .5s ease .45s";
+          requestAnimationFrame(function () {
+            n.style.opacity = n === halo ? ".18" : "1";
+          });
+        });
+      }
+    }
+  }
+
+  // --- flow ---------------------------------------------------------------
+  $("consent").addEventListener("change", function (e) {
+    $("start").disabled = !e.target.checked;
+    document.getElementById("consent-wrap").classList.toggle("sel", e.target.checked);
+  });
+  $("start").addEventListener("click", function () { show("s-assess"); renderDim(); });
+  $("back").addEventListener("click", function () {
+    if (dimIndex > 0) { dimIndex -= 1; renderDim(); }
+  });
+  $("next").addEventListener("click", function () {
+    if (dimIndex < order.length - 1) { dimIndex += 1; renderDim(); return; }
+    $("prog-fill").style.width = "100%";
+    show("s-processing");
+    setTimeout(function () {
+      var res = window.ReadinessScoring.score(responses, content);
+      renderResults(res);
+    }, 450);
+  });
+  $("restart").addEventListener("click", function () {
+    responses = {}; dimIndex = 0; $("consent").checked = false; $("start").disabled = true;
+    document.getElementById("consent-wrap").classList.remove("sel");
+    show("s-welcome");
+  });
+
+  // --- boot ---------------------------------------------------------------
+  fetch(CONTENT_URL)
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (json) {
+      content = json;
+      order = content.dimensions.slice();
+      if (!window.ReadinessScoring) throw new Error("scoring.js did not load");
+    })
+    .catch(function (e) {
+      document.querySelector("#s-welcome .card").innerHTML =
+        '<h2>Could not load the assessment</h2><p class="lede">' + String(e.message) +
+        '</p><p class="muted">This page must be served over http (not opened as a file), with ' +
+        'scoring.js and the content JSON one level up. From the readiness folder run: ' +
+        '<code>python3 -m http.server 8000</code> then open ' +
+        '<code>http://localhost:8000/web/</code>.</p>';
+    });
+})();
+</script>
+</body>
+</html>

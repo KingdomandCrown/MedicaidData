@@ -327,7 +327,7 @@ function score(responses, content, options) {
   };
 }
 
-module.exports = {
+const API = {
   score,
   // exported for unit tests / reuse
   scoreItem,
@@ -339,3 +339,8 @@ module.exports = {
   selectTargets,
   normalize,
 };
+
+// One source of truth for both surfaces: Node (tests, server-side scoring) and
+// the browser (the assessment UI). Scoring must never fork between them.
+if (typeof module !== "undefined" && module.exports) module.exports = API;
+if (typeof window !== "undefined") window.ReadinessScoring = API;
