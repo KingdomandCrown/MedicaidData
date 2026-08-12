@@ -1,0 +1,60 @@
+﻿{
+  "hospital_name": "Cascade Regional Medical Center",
+  "last_updated_on": "2026-04-01",
+  "version": "2.2.0",
+  "hospital_location": ["Cascade Regional Medical Center"],
+  "hospital_address": ["500 Health Way, Seattle, WA 98101"],
+  "license_information": {"license_number": "WA-12345", "state": "WA"},
+  "affirmation": {"affirmation": "...", "confirm_affirmation": true},
+  "standard_charge_information": [
+    {
+      "description": "MRI brain without contrast",
+      "code_information": [
+        {"code": "70551", "type": "CPT"},
+        {"code": "0350", "type": "RC"}
+      ],
+      "standard_charges": [
+        {
+          "setting": "outpatient",
+          "billing_class": "facility",
+          "gross_charge": 3200.00,
+          "discounted_cash": 2100.00,
+          "minimum": 1400.00,
+          "maximum": 2600.00,
+          "modifiers": ["26"],
+          "payers_information": [
+            {
+              "payer_name": "Premera",
+              "plan_name": "Blue Cross PPO",
+              "standard_charge_dollar": 1850.50,
+              "methodology": "fee schedule",
+              "estimated_amount": 1900.00,
+              "additional_payer_notes": "in-network"
+            },
+            {
+              "payer_name": "Regence",
+              "plan_name": "Medicare Advantage",
+              "standard_charge_percentage": 62.5,
+              "standard_charge_algorithm": "62.5% of billed charges",
+              "methodology": "percent of total billed charges"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "Ibuprofen 200mg tablet",
+      "drug_information": {"unit": "1", "type": "tablet"},
+      "code_information": [{"code": "J8499", "type": "HCPCS"}],
+      "standard_charges": [
+        {
+          "setting": "inpatient",
+          "billing_class": "facility",
+          "gross_charge": 8.00,
+          "discounted_cash": 5.00,
+          "payers_information": []
+        }
+      ]
+    }
+  ]
+}

@@ -165,15 +165,47 @@ def _strip_hash_prefix(name: str) -> str:
 # --- file opening ---------------------------------------------------------
 
 
+# Many hospitals export these files from Excel on Windows, so they arrive in
+# cp1252 rather than UTF-8 — a curly apostrophe lands as 0x92 and blows up a
+# strict UTF-8 read. Sniff a leading chunk and pick the encoding that decodes
+# it, preferring UTF-8 so genuinely-UTF-8 files are never mangled.
+_SNIFF_BYTES = 256 * 1024
+
+
+def detect_encoding(sample: bytes) -> str:
+    """Return the text encoding to use for a CSV sample."""
+
+    if sample.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    try:
+        # Trailing bytes may split a multi-byte character; that is not evidence
+        # against UTF-8, so ignore errors at the tail only.
+        sample.decode("utf-8")
+        return "utf-8-sig"
+    except UnicodeDecodeError as exc:
+        if exc.start >= len(sample) - 4:
+            return "utf-8-sig"
+    return "cp1252"
+
+
+def _sniff_file(path: str) -> str:
+    with open(path, "rb") as fh:
+        return detect_encoding(fh.read(_SNIFF_BYTES))
+
+
 def open_mrf_text(path: str):
     """Return a text stream for an MRF ``.csv`` or ``.zip`` (context manager).
 
-    For a zip, the first ``.csv`` member is streamed without extraction.
+    For a zip, the first ``.csv`` member is streamed without extraction. The
+    encoding is detected per file rather than assumed.
     """
 
     if path.lower().endswith(".zip"):
         return _ZipCsvStream(path)
-    return open(path, "r", encoding="utf-8-sig", newline="")
+    encoding = _sniff_file(path)
+    if encoding != "utf-8-sig":
+        log.info("%s: reading as %s", os.path.basename(path), encoding)
+    return open(path, "r", encoding=encoding, newline="", errors="replace")
 
 
 class _ZipCsvStream:
@@ -186,8 +218,14 @@ class _ZipCsvStream:
             self._zip.close()
             raise ValueError(f"no CSV member found inside {path}")
         self._member = members[0]
+        with self._zip.open(self._member) as probe:
+            encoding = detect_encoding(probe.read(_SNIFF_BYTES))
+        if encoding != "utf-8-sig":
+            log.info("%s (%s): reading as %s", os.path.basename(path), self._member, encoding)
         self._raw = self._zip.open(self._member)
-        self._text = io.TextIOWrapper(self._raw, encoding="utf-8-sig", newline="")
+        self._text = io.TextIOWrapper(
+            self._raw, encoding=encoding, newline="", errors="replace"
+        )
 
     def __enter__(self):
         return self._text
@@ -530,6 +568,36 @@ def _wide_rows(
 import contextlib  # noqa: E402
 
 
+class _BomStrippedBinary:
+    """Binary stream with a leading UTF-8 BOM removed.
+
+    Plenty of published JSON files are saved with a byte order mark. A JSON
+    parser reading raw bytes sees those three bytes before the opening brace
+    and rejects the document, so strip them before parsing.
+    """
+
+    _BOM = b"\xef\xbb\xbf"
+
+    def __init__(self, stream):
+        self._stream = stream
+        head = stream.read(3)
+        self._pending = b"" if head == self._BOM else head
+
+    def read(self, size=-1):
+        if not self._pending:
+            return self._stream.read(size)
+        pending, self._pending = self._pending, b""
+        if size is None or size < 0:
+            return pending + self._stream.read()
+        if size <= len(pending):
+            self._pending = pending[size:]
+            return pending[:size]
+        return pending + self._stream.read(size - len(pending))
+
+    def close(self):
+        self._stream.close()
+
+
 @contextlib.contextmanager
 def _open_binary(path: str):
     """Yield a binary stream for a ``.json`` file or a ``.json`` inside a zip."""
@@ -542,14 +610,14 @@ def _open_binary(path: str):
             raise ValueError(f"no JSON member found inside {path}")
         raw = zf.open(members[0])
         try:
-            yield raw
+            yield _BomStrippedBinary(raw)
         finally:
             raw.close()
             zf.close()
     else:
         fh = open(path, "rb")
         try:
-            yield fh
+            yield _BomStrippedBinary(fh)
         finally:
             fh.close()
 
