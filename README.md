@@ -101,7 +101,16 @@ hospitals ingest-charges ~/Downloads/520591656_the-johns-hopkins-hospital_standa
 
 # Smoke-test a very large file by capping items read
 hospitals ingest-charges ~/Downloads/410944601_mayo-clinic_standardcharges.csv --limit 1000
+
+# A large batch: resumable, and one bad file will not end the run
+hospitals ingest-charges ~/Downloads/round5/ --skip-existing --continue-on-error
 ```
+
+At batch scale two flags matter. `--skip-existing` leaves files already loaded
+alone, so a run that dies at file 300 of 400 picks up where it stopped rather
+than redoing everything. `--continue-on-error` logs a failing file and moves on,
+listing every failure at the end instead of aborting the batch. Progress is
+logged as `[n/total]` so a long run is followable.
 
 The parser handles every physical layout CMS files arrive in, auto-detected:
 
@@ -181,6 +190,8 @@ hospitals ingest-charges PATH [options]
   PATH                     An MRF .csv/.zip/.json/.xlsx, or a directory of them
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Cap on items (data rows) read per file
+  --skip-existing          Skip files already loaded (resumable batches)
+  --continue-on-error      Log and skip failing files; report them at the end
   --echo-sql               Echo SQL statements (debugging)
 
 hospitals link-charges [options]

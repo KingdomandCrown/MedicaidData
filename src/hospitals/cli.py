@@ -101,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cap on items (data rows) read per file (smoke testing large files).",
     )
     charges.add_argument("--echo-sql", action="store_true")
+    charges.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip files already loaded (makes a large batch resumable).",
+    )
+    charges.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Keep going when a file fails; report the failures at the end.",
+    )
 
     link = sub.add_parser(
         "link-charges",
@@ -178,6 +188,8 @@ def _cmd_ingest_charges(args: argparse.Namespace) -> int:
             database_url=args.database_url,
             limit=args.limit,
             echo_sql=args.echo_sql,
+            skip_existing=args.skip_existing,
+            continue_on_error=args.continue_on_error,
         )
     except FileNotFoundError as exc:
         log.error("File not found: %s", exc)

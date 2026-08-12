@@ -433,6 +433,17 @@ def load_charges(
     return total
 
 
+def loaded_source_files(engine: Engine) -> set[str]:
+    """Return the set of ``source_file`` values already loaded.
+
+    Used to make a large batch resumable: a run that dies partway can be
+    restarted without re-reading the files it already finished.
+    """
+
+    with engine.connect() as conn:
+        return {r[0] for r in conn.execute(select(charge_sources.c.source_file))}
+
+
 def count_charges(engine: Engine, ein: str | None = None) -> int:
     stmt = select(func.count()).select_from(standard_charges)
     if ein:
