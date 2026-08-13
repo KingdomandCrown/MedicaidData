@@ -5,7 +5,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select
 
-from hospitals.db import charge_sources, make_engine, standard_charges
+from hospitals.db import (
+    charge_sources,
+    loaded_source_files,
+    make_engine,
+    standard_charges,
+)
 from hospitals.ingest_charges import ingest_charge_file, ingest_charge_path
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -98,6 +103,32 @@ def test_missing_file_raises(tmp_path):
     db_url = f"sqlite:///{tmp_path / 'x.sqlite'}"
     with pytest.raises(FileNotFoundError):
         ingest_charge_file(str(tmp_path / "nope.csv"), database_url=db_url)
+
+
+def test_a_zero_row_file_is_retried_by_skip_existing(tmp_path, tall_csv):
+    """A file that loaded nothing is not "done" — a parser fix must reach it.
+
+    Zero-row files still get a ``charge_sources`` row, so treating any row
+    there as "already loaded" would skip them forever.
+    """
+
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    shutil.copy(tall_csv, folder / "111111111_good_standardcharges.csv")
+    # Same header block, no data rows at all.
+    header = open(tall_csv).read().splitlines(keepends=True)[:3]
+    (folder / "222222222_empty_standardcharges.csv").write_text("".join(header))
+
+    db_url = f"sqlite:///{tmp_path / 'c.sqlite'}"
+    first = ingest_charge_path(str(folder), database_url=db_url)
+    assert sorted(s.charges_loaded for s in first) == [0, 3]
+
+    assert loaded_source_files(make_engine(db_url)) == {
+        "111111111_good_standardcharges.csv"
+    }
+
+    second = ingest_charge_path(str(folder), database_url=db_url, skip_existing=True)
+    assert [s.source_file for s in second] == ["222222222_empty_standardcharges.csv"]
 
 
 def test_missing_directory_raises_even_with_continue_on_error(tmp_path):

@@ -112,6 +112,10 @@ than redoing everything. `--continue-on-error` logs a failing file and moves on,
 listing every failure at the end instead of aborting the batch. Progress is
 logged as `[n/total]` so a long run is followable.
 
+"Already loaded" means *loaded at least one charge row*. A file that parsed but
+produced nothing is left in the retry set, so re-running after a parser fix
+reaches it instead of skipping it forever.
+
 The parser handles every physical layout CMS files arrive in, auto-detected:
 
 - **tall CSV** — one row per item × payer × plan (`payer_name`/`plan_name` are

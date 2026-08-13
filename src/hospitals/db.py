@@ -434,14 +434,20 @@ def load_charges(
 
 
 def loaded_source_files(engine: Engine) -> set[str]:
-    """Return the set of ``source_file`` values already loaded.
+    """Return the set of ``source_file`` values that loaded at least one charge.
 
     Used to make a large batch resumable: a run that dies partway can be
-    restarted without re-reading the files it already finished.
+    restarted without re-reading the files it already finished. A file that
+    produced *zero* rows is deliberately not counted as loaded — it still has a
+    ``charge_sources`` row, but nothing came of it, so a re-run (typically after
+    a parser fix) should try it again rather than skip it forever.
     """
 
+    stmt = select(charge_sources.c.source_file).where(
+        charge_sources.c.charge_count > 0
+    )
     with engine.connect() as conn:
-        return {r[0] for r in conn.execute(select(charge_sources.c.source_file))}
+        return {r[0] for r in conn.execute(stmt)}
 
 
 def count_charges(engine: Engine, ein: str | None = None) -> int:
