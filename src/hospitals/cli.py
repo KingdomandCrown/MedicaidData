@@ -24,6 +24,7 @@ import sys
 from . import __version__
 from .cms_pos import CmsUnavailableError
 from .db import count_charges, count_hospitals, make_engine
+from .gap import build_gap_report, write_xlsx
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
@@ -52,7 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--state",
         default="KS",
-        help="State USPS code or name to ingest (default: KS).",
+        help="State USPS code or name to ingest, or ALL for every state "
+        "in one pass (default: KS).",
     )
     ingest.add_argument(
         "--database-url",
@@ -126,6 +128,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-name-fallback",
         action="store_true",
         help="Disable the name+state heuristic; use the crosswalk only.",
+    )
+
+    gap = sub.add_parser(
+        "gap-report",
+        help="List hospitals with no price-transparency file yet (writes .xlsx).",
+    )
+    gap.add_argument("--database-url", default=DEFAULT_DB_URL)
+    gap.add_argument(
+        "--output",
+        default="hospitals_to_download.xlsx",
+        help="Workbook to write (default: hospitals_to_download.xlsx).",
+    )
+    gap.add_argument(
+        "--min-system-size",
+        type=int,
+        default=2,
+        help="Hospitals a candidate system needs before it is ranked as one "
+        "rather than listed as independents (default: 2).",
     )
 
     xwalk = sub.add_parser(
@@ -228,6 +248,38 @@ def _cmd_link_charges(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gap_report(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    report = build_gap_report(engine, min_system_size=args.min_system_size)
+
+    if not report.total_hospitals:
+        print(
+            "\nNo hospitals in the database — load the POS universe first:\n"
+            "  hospitals ingest --state ALL --database-url <url>",
+            file=sys.stderr,
+        )
+        return 2
+
+    write_xlsx(report, args.output)
+
+    print(
+        f"\n{report.total_covered}/{report.total_hospitals} hospitals have a "
+        f"price-transparency file ({report.total_remaining} to go)."
+    )
+    print(
+        f"{len(report.systems)} candidate systems, "
+        f"{len(report.independents)} independents."
+    )
+    known = [s for s in report.systems if s.already_publishing]
+    if known:
+        print(f"{len(known)} of those systems already publish a file we have parsed.")
+    never = report.uncrawled_states
+    if never:
+        print(f"States with nothing ingested yet ({len(never)}): {', '.join(never)}")
+    print(f"\nWrote {args.output}")
+    return 0
+
+
 def _cmd_load_crosswalk(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     try:
@@ -253,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest_charges(args)
     if args.command == "link-charges":
         return _cmd_link_charges(args)
+    if args.command == "gap-report":
+        return _cmd_gap_report(args)
     if args.command == "load-crosswalk":
         return _cmd_load_crosswalk(args)
     parser.error(f"unknown command: {args.command}")

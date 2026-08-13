@@ -86,3 +86,23 @@ def test_maryland_filter_from_same_fixture(tmp_path, fixture_csv):
         ).one()
     assert row.ccn == "210001"
     assert row.state == "MD"
+
+
+def test_all_states_loads_every_state_in_one_pass(tmp_path, fixture_csv):
+    """--state ALL is the national load that feeds the gap report."""
+
+    db_url = f"sqlite:///{tmp_path / 'all.sqlite'}"
+    summary = ingest_state(
+        state="ALL",
+        database_url=db_url,
+        input_file=fixture_csv,
+        active_only=True,
+    )
+    assert summary.state == "ALL"
+
+    engine = make_engine(db_url)
+    with engine.connect() as conn:
+        states = {r[0] for r in conn.execute(select(hospitals.c.state))}
+    # Both states in the fixture arrive from a single read.
+    assert {"KS", "MD"} <= states
+    assert summary.loaded == len(states) or summary.loaded >= 2

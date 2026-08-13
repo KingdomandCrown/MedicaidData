@@ -192,11 +192,50 @@ WHERE s.negotiated_dollar IS NOT NULL;
 
 ---
 
+## What still needs downloading
+
+There is no national feed of price-transparency files — each hospital publishes
+its own — so the download worklist is the gap between the POS universe (every
+Medicare-certified hospital) and what has actually been ingested:
+
+```bash
+# 1. Load the hospital universe once (single pass over the national POS file)
+hospitals ingest --state ALL --database-url sqlite:///data/round5.sqlite
+
+# 2. Write the worklist
+hospitals gap-report --database-url sqlite:///data/round5.sqlite \
+    --output hospitals_to_download.xlsx
+```
+
+The workbook has three sheets:
+
+- **Priority Systems** — candidate health systems ranked by how many hospitals
+  one visit yields. Systems we have *already* parsed a file from sort to the
+  top (the URL is known, and the rest are usually on the same page); the
+  `Known file` column names that file.
+- **Independents by State** — everything not in a system, grouped by state,
+  with CCN, city, type, and bed count.
+- **State Coverage** — per-state downloaded / remaining / % covered, worst
+  first, with states that have nothing at all flagged `not started`.
+
+A hospital counts as covered when a charge source links to its CCN *or* matches
+its name and state unambiguously — so the report is usable before the NPI→CCN
+crosswalk is loaded. Files that parsed but produced no rows do not count.
+
+System membership is not in the POS file, so it is inferred from the leading
+brand token in the hospital name (`BAYLOR`, `ASCENSION`, `CHRISTUS`); names that
+lead with a descriptor fall through to the first real name, and `Saint`/`St`
+take a second token so unrelated systems do not merge. It is a heuristic for
+*ordering* the work — `--min-system-size` controls how big a cluster has to be
+before it is called a system.
+
+---
+
 ## CLI reference
 
 ```
 hospitals ingest [options]
-  --state STATE            USPS code or name to ingest (default: KS)
+  --state STATE            USPS code or name, or ALL for every state (default: KS)
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --input-file PATH        Read a local POS CSV instead of downloading from CMS
   --include-inactive       Keep providers whose termination code is not "active"
@@ -210,6 +249,11 @@ hospitals ingest-charges PATH [options]
   --skip-existing          Skip files already loaded (resumable batches)
   --continue-on-error      Log and skip failing files; report them at the end
   --echo-sql               Echo SQL statements (debugging)
+
+hospitals gap-report [options]
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --output PATH            Workbook to write (default: hospitals_to_download.xlsx)
+  --min-system-size N      Cluster size before it counts as a system (default: 2)
 
 hospitals link-charges [options]
   --crosswalk PATH         Load this NPI->CCN CSV before linking
@@ -311,6 +355,7 @@ src/hospitals/
   price_transparency.py MRF parser: tall + wide CSV and JSON layouts, streamed
   ingest_charges.py     charge-file orchestration (single file or directory)
   link.py               NPI->CCN crosswalk loader + charge<->hospital linker
+  gap.py                download worklist: coverage gap, system ranking, .xlsx
   db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
   states.py             USPS / SSA / FIPS state reference data
   logging_config.py     logging setup
@@ -334,6 +379,7 @@ tests/
   test_price_transparency_encoding.py cp1252 CSVs and BOM-prefixed JSON
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking
+  test_gap.py                    brand inference, coverage gap, workbook
 ```
 
 ---
