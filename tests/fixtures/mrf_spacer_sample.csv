@@ -1,0 +1,6 @@
+"hospital_name","last_updated_on","version","location_name","hospital_address","type_2_npi","license_number|KS"
+"Prairie Community Hospital","2026-04-01","3.0.0","Prairie Community Hospital","500 Elm St, Topeka, KS 66603","1114052274","KS-4471"
+"","","","","","",""
+"description","code|1","code|1|type","billing_class","setting","standard_charge|gross","payer_name","plan_name","standard_charge|negotiated_dollar"
+"Chest x-ray 2 views","71046","CPT","facility","outpatient","310.00","Aetna","Commercial PPO","145.25"
+"Chest x-ray 2 views","71046","CPT","facility","outpatient","310.00","BCBS","Blue Choice","152.00"

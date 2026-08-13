@@ -1,0 +1,4 @@
+"description","code|1","code|1|type","billing_class","setting","standard_charge|gross","standard_charge|discounted_cash","payer_name","plan_name","standard_charge|negotiated_dollar","standard_charge|methodology","standard_charge|min","standard_charge|max"
+"CT scan head w/o contrast","70450","CPT","facility","outpatient","1200.00","800.00","Aetna","Commercial PPO","640.50","fee schedule","500.00","900.00"
+"CT scan head w/o contrast","70450","CPT","facility","outpatient","1200.00","800.00","BCBS","Blue Choice","610.00","fee schedule","500.00","900.00"
+"Metformin 500mg tablet","J8499","HCPCS","facility","inpatient","5.00","3.00","UnitedHealthcare","UHC Choice","2.75","case rate","2.50","4.00"

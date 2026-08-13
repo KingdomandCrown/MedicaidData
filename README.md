@@ -125,6 +125,19 @@ The parser handles every physical layout CMS files arrive in, auto-detected:
   row with `openpyxl` in read-only mode. A spreadsheet is just another way of
   producing the same rows, so it shares the CSV layout logic exactly.
 
+Real-world files also vary in *where the data starts*. The CMS template puts two
+metadata rows (hospital name, NPI, license, version) above the data header, but
+some hospitals publish the data header on line 1 with no preamble, and others
+leave a blank spacer row in between. The header block is **located by column
+name** rather than assumed to be line 3, so all three arrangements load. A file
+with no preamble has no hospital name or NPI to read, so it is identified by its
+filename EIN alone. A file with no recognizable data header now fails loudly
+instead of quietly loading zero rows.
+
+Encoding is detected per file: many hospitals export from Excel on Windows, so
+the file arrives in cp1252 rather than UTF-8, and published JSON often carries a
+UTF-8 byte order mark. Both are handled without mangling genuine UTF-8 files.
+
 Everything is **streamed** — CSVs row by row, a `.zip` read without extracting
 it, and JSON parsed iteratively — so a 340 MB (or multi-GB) file stays memory-
 and disk-friendly. Each file is keyed by its **EIN** (from the filename) and,
@@ -303,12 +316,18 @@ tests/
   fixtures/mrf_wide_sample.csv   wide-layout standard charges (synthetic)
   fixtures/mrf_sample.json       JSON-layout standard charges (synthetic)
   fixtures/mrf_tall_sample.xlsx  tall layout as a spreadsheet (synthetic)
+  fixtures/mrf_headeronly_sample.csv  data header on line 1, no preamble
+  fixtures/mrf_spacer_sample.csv      blank row between preamble and header
+  fixtures/mrf_cp1252_sample.csv      Windows-encoded CSV (+ .zip twin)
+  fixtures/mrf_bom_sample.json        JSON with a UTF-8 byte order mark
   test_normalize.py              identifier + code normalization
   test_cms_pos.py                discovery, pagination, CSV reading
   test_ingest.py                 POS end-to-end into SQLite
   test_price_transparency.py     MRF parsing (tall + wide CSV, unpivot)
   test_price_transparency_json.py JSON MRF parsing + end-to-end
   test_price_transparency_xlsx.py XLSX parsing, CSV parity, mixed-folder ingest
+  test_price_transparency_header.py header-block location, missing preamble
+  test_price_transparency_encoding.py cp1252 CSVs and BOM-prefixed JSON
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking
 ```

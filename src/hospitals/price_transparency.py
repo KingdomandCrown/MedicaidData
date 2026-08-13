@@ -10,8 +10,10 @@ wild, and this module reads both:
   of columns like ``standard_charge|AETNA [1003]|AETNA PPO [100307]|negotiated_dollar``.
   These are unpivoted back into item x payer x plan rows. (e.g. U-Michigan)
 
-Every MRF begins with two metadata rows (hospital name, address, NPI, license,
-version, last-updated) followed by the data header and then the data. Parsing
+Every conforming MRF begins with two metadata rows (hospital name, address,
+NPI, license, version, last-updated) followed by the data header and then the
+data. Some hospitals publish the data header on line 1 with no metadata
+preamble at all, so the header block is *located* rather than assumed. Parsing
 is driven entirely by header names, because column *order* varies between
 hospitals.
 
@@ -285,6 +287,63 @@ def parse_metadata(meta_header: Sequence[str], meta_values: Sequence[str]) -> Mr
     )
 
 
+# Columns that only ever appear in a *data* header, never in the metadata
+# preamble. Used to find the header row instead of assuming it is line 3.
+_DATA_HEADER_SIGNALS = {
+    "description",
+    "code|1",
+    "payer_name",
+    "billing_class",
+    "setting",
+}
+
+# How far to look for the data header before giving up. Real preambles are two
+# rows plus the odd blank spacer; anything deeper is not an MRF we understand.
+_MAX_PREAMBLE_ROWS = 8
+
+
+def _looks_like_data_header(row: Sequence[str]) -> bool:
+    lowered = {c.strip().lower() for c in row}
+    if lowered & _DATA_HEADER_SIGNALS:
+        return True
+    return any(c.startswith("standard_charge|") for c in lowered)
+
+
+def _read_header_block(reader, path: str) -> tuple[list[str], list[str], list[str]]:
+    """Locate the data header and return ``(meta_header, meta_values, data_header)``.
+
+    The CMS template puts two metadata rows above the data header, but a
+    handful of hospitals publish the data header on line 1. Scanning for the
+    header — rather than skipping a fixed two rows — reads both, and stops a
+    header-only file from being silently parsed as zero rows.
+    """
+
+    preamble: list[list[str]] = []
+    data_header: list[str] | None = None
+
+    for row in reader:
+        if not any(clean_str(c) for c in row):
+            continue  # blank spacer line between the preamble and the data
+        if _looks_like_data_header(row):
+            data_header = list(row)
+            break
+        preamble.append(list(row))
+        if len(preamble) > _MAX_PREAMBLE_ROWS:
+            raise ValueError(
+                f"{path}: no recognizable data header in the first "
+                f"{_MAX_PREAMBLE_ROWS} rows"
+            )
+
+    if data_header is None:
+        raise ValueError(f"{path}: file ended before the data header")
+
+    if len(preamble) >= 2:
+        return preamble[-2], preamble[-1], data_header
+    # Header-only file: no hospital metadata to read, so the EIN from the
+    # filename is the only identifier we get.
+    return [], [], data_header
+
+
 def detect_layout(data_header: Sequence[str]) -> str:
     """Return "tall" or "wide" from the data header column names."""
 
@@ -412,17 +471,21 @@ def read_mrf(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator
     reader, close = _row_source(path)
 
     try:
-        meta_header = next(reader)
-        meta_values = next(reader)
-        data_header = next(reader)
-    except StopIteration as exc:
+        meta_header, meta_values, data_header = _read_header_block(reader, path)
+    except Exception:
         close()
-        raise ValueError(f"{path}: file ended before the data header") from exc
+        raise
 
     metadata = parse_metadata(meta_header, meta_values)
     metadata.ein = ein_from_filename(path)
     metadata.source_file = _strip_hash_prefix(path)
     metadata.layout = detect_layout(data_header)
+    if not meta_header:
+        log.warning(
+            "%s: no metadata preamble — hospital identified by EIN %s only",
+            metadata.source_file,
+            metadata.ein,
+        )
     log.info(
         "MRF %s: %s (%s layout, NPI=%s, EIN=%s, version=%s)",
         metadata.source_file,
