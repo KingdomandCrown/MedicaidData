@@ -98,3 +98,16 @@ def test_missing_file_raises(tmp_path):
     db_url = f"sqlite:///{tmp_path / 'x.sqlite'}"
     with pytest.raises(FileNotFoundError):
         ingest_charge_file(str(tmp_path / "nope.csv"), database_url=db_url)
+
+
+def test_missing_directory_raises_even_with_continue_on_error(tmp_path):
+    """A mistyped folder must fail as a bad path, not as one bad file."""
+
+    db_url = f"sqlite:///{tmp_path / 'x.sqlite'}"
+    with pytest.raises(FileNotFoundError):
+        ingest_charge_path(
+            str(tmp_path / "round5"),
+            database_url=db_url,
+            skip_existing=True,
+            continue_on_error=True,
+        )

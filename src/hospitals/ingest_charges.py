@@ -84,6 +84,12 @@ def ingest_charge_path(
     malformed file from ending the batch.
     """
 
+    # Check the target up front: a mistyped folder is not a per-file failure,
+    # and letting it through would have ``--continue-on-error`` report it as
+    # one bad file rather than "that path does not exist".
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+
     if os.path.isdir(path):
         files = sorted(
             f
