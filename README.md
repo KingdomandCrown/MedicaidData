@@ -190,6 +190,28 @@ WHERE s.negotiated_dollar IS NOT NULL;
 > typically derived from NPPES + CMS provider datasets. The linker is source
 > agnostic — bring any CSV with `npi,ccn` columns.
 
+### Tidying the download folder
+
+Once a batch is loaded, the finished files bury the ones still needing
+attention. `archive-ingested` moves out only what the database confirms is
+loaded — matched on the same filename key the ingester stored, and only where
+at least one charge row landed:
+
+```bash
+# Preview (default: nothing is touched)
+hospitals archive-ingested ~/Downloads/round5 --to ~/Downloads/_to_delete \
+    --database-url sqlite:///data/round5.sqlite
+
+# Do it
+hospitals archive-ingested ~/Downloads/round5 --to ~/Downloads/_to_delete \
+    --database-url sqlite:///data/round5.sqlite --apply
+```
+
+Files that failed to parse, that loaded zero rows, or that are not an
+ingestible type stay put and are listed — so what remains in the folder is the
+work left. Nothing is deleted, and a name already taken at the destination is
+reported rather than overwritten.
+
 ---
 
 ## What still needs downloading
@@ -254,6 +276,12 @@ hospitals ingest-charges PATH [options]
   --skip-existing          Skip files already loaded (resumable batches)
   --continue-on-error      Log and skip failing files; report them at the end
   --echo-sql               Echo SQL statements (debugging)
+
+hospitals archive-ingested PATH --to DEST [options]
+  PATH                     Folder of MRF files to tidy
+  --to DEST                Folder to move loaded files into (created if missing)
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --apply                  Actually move; without it, only report what would move
 
 hospitals gap-report [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
@@ -361,6 +389,7 @@ src/hospitals/
   ingest_charges.py     charge-file orchestration (single file or directory)
   link.py               NPI->CCN crosswalk loader + charge<->hospital linker
   gap.py                download worklist: coverage gap, system ranking, .xlsx
+  archive.py            move loaded files out of the working folder
   db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
   states.py             USPS / SSA / FIPS state reference data
   logging_config.py     logging setup
@@ -385,6 +414,7 @@ tests/
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking
   test_gap.py                    brand inference, coverage gap, workbook
+  test_archive.py                folder tidying, dry run, collision safety
 ```
 
 ---

@@ -23,6 +23,7 @@ import sys
 
 from . import __version__
 from .cms_pos import CmsUnavailableError
+from .archive import archive_ingested
 from .db import count_charges, count_hospitals, make_engine
 from .gap import build_gap_report, write_xlsx
 from .ingest import ingest_state
@@ -128,6 +129,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-name-fallback",
         action="store_true",
         help="Disable the name+state heuristic; use the crosswalk only.",
+    )
+
+    archive = sub.add_parser(
+        "archive-ingested",
+        help="Move files already loaded out of a folder (dry run unless --apply).",
+    )
+    archive.add_argument("path", help="Folder of MRF files to tidy.")
+    archive.add_argument(
+        "--to",
+        required=True,
+        dest="destination",
+        help="Folder to move loaded files into (created if missing).",
+    )
+    archive.add_argument("--database-url", default=DEFAULT_DB_URL)
+    archive.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually move the files. Without it, only report what would move.",
     )
 
     gap = sub.add_parser(
@@ -248,6 +267,38 @@ def _cmd_link_charges(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_archive_ingested(args: argparse.Namespace) -> int:
+    try:
+        summary = archive_ingested(
+            args.path,
+            args.destination,
+            database_url=args.database_url,
+            apply=args.apply,
+        )
+    except NotADirectoryError as exc:
+        log.error("Not a directory: %s", exc)
+        print(f"\nERROR: not a directory: {exc}", file=sys.stderr)
+        return 2
+
+    verb = "Would move" if summary.dry_run else "Moved"
+    print(f"\n{verb} {len(summary.moved)} loaded file(s) to {args.destination}.")
+
+    if summary.not_loaded:
+        print(f"\nStaying put — not loaded ({len(summary.not_loaded)}):")
+        for name in summary.not_loaded:
+            print(f"  {name}")
+    if summary.collisions:
+        print(f"\nStaying put — name already at destination ({len(summary.collisions)}):")
+        for name in summary.collisions:
+            print(f"  {name}")
+    if summary.other_files:
+        print(f"\nIgnored (not an ingestible file type): {len(summary.other_files)}")
+
+    if summary.dry_run and summary.moved:
+        print("\nThis was a dry run. Re-run with --apply to move them.")
+    return 0
+
+
 def _cmd_gap_report(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     report = build_gap_report(engine, min_system_size=args.min_system_size)
@@ -311,6 +362,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest_charges(args)
     if args.command == "link-charges":
         return _cmd_link_charges(args)
+    if args.command == "archive-ingested":
+        return _cmd_archive_ingested(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
     if args.command == "load-crosswalk":
