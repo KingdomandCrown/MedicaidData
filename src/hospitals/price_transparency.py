@@ -329,9 +329,12 @@ def _read_header_block(reader, path: str) -> tuple[list[str], list[str], list[st
             break
         preamble.append(list(row))
         if len(preamble) > _MAX_PREAMBLE_ROWS:
+            # Name the columns we did see — otherwise diagnosing an unfamiliar
+            # layout means opening the file by hand.
+            seen = ", ".join(c.strip() for c in preamble[0][:8] if c.strip())
             raise ValueError(
                 f"{path}: no recognizable data header in the first "
-                f"{_MAX_PREAMBLE_ROWS} rows"
+                f"{_MAX_PREAMBLE_ROWS} rows (first row starts: {seen})"
             )
 
     if data_header is None:
