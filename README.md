@@ -217,6 +217,11 @@ The workbook has three sheets:
   with CCN, city, type, and bed count.
 - **State Coverage** — per-state downloaded / remaining / % covered, worst
   first, with states that have nothing at all flagged `not started`.
+- **Unattributed Files** — files already ingested whose hospital could not be
+  identified (no metadata preamble, no EIN in the filename). They are neither
+  counted as covered nor listed as gaps: counting them either way would hide a
+  hospital or have someone download it twice. Fill in the `Assign CCN` column
+  and load it as a crosswalk to resolve them.
 
 A hospital counts as covered when a charge source links to its CCN *or* matches
 its name and state unambiguously — so the report is usable before the NPI→CCN

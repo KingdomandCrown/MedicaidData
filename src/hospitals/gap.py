@@ -116,10 +116,29 @@ class StateCoverage:
 
 
 @dataclass
+class Unattributed:
+    """A file we hold whose hospital could not be identified.
+
+    Usually a file published with no metadata preamble and no EIN in its name,
+    so there is nothing to join on. These are *not* gaps — the data is already
+    in hand — but they will look like gaps until someone assigns a CCN, so they
+    are reported separately rather than silently counted either way.
+    """
+
+    source_file: str
+    hospital_name: str | None
+    ein: str | None
+    primary_npi: str | None
+    state: str | None
+    charge_count: int
+
+
+@dataclass
 class GapReport:
     systems: list[SystemGap]
     independents: list[HospitalGap]
     coverage: list[StateCoverage]
+    unattributed: list[Unattributed]
     total_hospitals: int
     total_covered: int
 
@@ -134,8 +153,8 @@ class GapReport:
         return [c.state for c in self.coverage if c.covered == 0]
 
 
-def _covered_ccns(conn) -> tuple[set[str], dict[str, str]]:
-    """Return (CCNs already downloaded, brand -> an example source file).
+def _covered_ccns(conn) -> tuple[set[str], dict[str, str], list[Unattributed]]:
+    """Return (CCNs downloaded, brand -> example source file, unattributed files).
 
     A charge source counts as covering a hospital when it was linked to a CCN,
     or when its name and state match a POS hospital unambiguously — the same
@@ -153,6 +172,7 @@ def _covered_ccns(conn) -> tuple[set[str], dict[str, str]]:
 
     covered: set[str] = set()
     publishing: dict[str, str] = {}
+    unattributed: list[Unattributed] = []
 
     rows = conn.execute(
         select(
@@ -162,6 +182,8 @@ def _covered_ccns(conn) -> tuple[set[str], dict[str, str]]:
             charge_sources.c.hospital_address,
             charge_sources.c.source_file,
             charge_sources.c.charge_count,
+            charge_sources.c.ein,
+            charge_sources.c.primary_npi,
         )
     ).mappings()
 
@@ -175,20 +197,34 @@ def _covered_ccns(conn) -> tuple[set[str], dict[str, str]]:
             covered.add(src["ccn"])
             continue
         state = _state_of(src)
-        if not state:
-            continue
-        candidates = name_index.get((normalize_name(src["hospital_name"]), state))
+        candidates = (
+            name_index.get((normalize_name(src["hospital_name"]), state))
+            if state
+            else None
+        )
         if candidates and len(candidates) == 1:
             covered.add(next(iter(candidates)))
+            continue
+        unattributed.append(
+            Unattributed(
+                source_file=src["source_file"],
+                hospital_name=src["hospital_name"],
+                ein=src["ein"],
+                primary_npi=src["primary_npi"],
+                state=state,
+                charge_count=src["charge_count"],
+            )
+        )
 
-    return covered, publishing
+    unattributed.sort(key=lambda u: -u.charge_count)
+    return covered, publishing, unattributed
 
 
 def build_gap_report(engine: Engine, *, min_system_size: int = 2) -> GapReport:
     """Diff the POS hospital universe against what has been ingested."""
 
     with engine.connect() as conn:
-        covered, publishing = _covered_ccns(conn)
+        covered, publishing, unattributed = _covered_ccns(conn)
 
         universe = conn.execute(
             select(
@@ -266,17 +302,19 @@ def build_gap_report(engine: Engine, *, min_system_size: int = 2) -> GapReport:
         systems=systems,
         independents=independents,
         coverage=coverage,
+        unattributed=unattributed,
         total_hospitals=len(universe),
         total_covered=len(universe) - len(remaining),
     )
     log.info(
         "Gap report: %d of %d hospitals covered; %d remaining "
-        "(%d candidate systems, %d independents)",
+        "(%d candidate systems, %d independents, %d unattributed files)",
         report.total_covered,
         report.total_hospitals,
         report.total_remaining,
         len(systems),
         len(independents),
+        len(unattributed),
     )
     return report
 
@@ -284,7 +322,12 @@ def build_gap_report(engine: Engine, *, min_system_size: int = 2) -> GapReport:
 # --- spreadsheet ----------------------------------------------------------
 
 
-_SHEETS = ("Priority Systems", "Independents by State", "State Coverage")
+_SHEETS = (
+    "Priority Systems",
+    "Independents by State",
+    "State Coverage",
+    "Unattributed Files",
+)
 
 
 def write_xlsx(report: GapReport, path: str) -> str:
@@ -363,6 +406,31 @@ def write_xlsx(report: GapReport, path: str) -> str:
                 "not started" if c.covered == 0 else "",
             ]
             for c in report.coverage
+        ],
+    )
+
+    sheet(
+        _SHEETS[3],
+        [
+            "Source file",
+            "Hospital name in file",
+            "EIN",
+            "NPI",
+            "State",
+            "Charge rows",
+            "Assign CCN",
+        ],
+        [
+            [
+                u.source_file,
+                u.hospital_name or "",
+                u.ein or "",
+                u.primary_npi or "",
+                u.state or "",
+                u.charge_count,
+                "",
+            ]
+            for u in report.unattributed
         ],
     )
 

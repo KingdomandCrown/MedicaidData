@@ -695,6 +695,7 @@ def _read_json_metadata(path: str) -> MrfMetadata:
     address: list[str] = []
     license_number = license_state = None
     npis: list[str] = []
+    has_charges = False
 
     with _open_binary(path) as fh:
         for prefix, event, value in ijson.parse(fh):
@@ -717,7 +718,14 @@ def _read_json_metadata(path: str) -> MrfMetadata:
                     npis.append(str(value).strip())
             # Stop before streaming the (potentially huge) charges array.
             if prefix == "standard_charge_information" and event == "start_array":
+                has_charges = True
                 break
+
+    # A .json (or a zip of them) that has neither the charges array nor a
+    # hospital name is not an MRF at all — some other tool's data that happened
+    # to land in the folder. Say so instead of loading it as an empty hospital.
+    if not has_charges and not hospital_name:
+        raise ValueError(f"{path}: not a CMS price transparency file")
 
     return MrfMetadata(
         hospital_name=hospital_name,

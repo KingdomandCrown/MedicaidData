@@ -273,6 +273,12 @@ def _cmd_gap_report(args: argparse.Namespace) -> int:
     known = [s for s in report.systems if s.already_publishing]
     if known:
         print(f"{len(known)} of those systems already publish a file we have parsed.")
+    if report.unattributed:
+        rows = sum(u.charge_count for u in report.unattributed)
+        print(
+            f"{len(report.unattributed)} file(s) held but not attributed to any "
+            f"hospital ({rows} charge rows) — see the Unattributed Files sheet."
+        )
     never = report.uncrawled_states
     if never:
         print(f"States with nothing ingested yet ({len(never)}): {', '.join(never)}")

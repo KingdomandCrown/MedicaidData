@@ -88,3 +88,27 @@ def test_ingest_json_end_to_end(tmp_path, json_mrf):
             select(func.count()).select_from(standard_charges)
         ).scalar_one()
         assert n == 3
+
+
+def test_a_json_that_is_not_an_mrf_is_rejected(tmp_path):
+    """A tool's own data landing in the folder must not load as an empty hospital."""
+
+    import json
+    import zipfile
+
+    not_mrf = tmp_path / "MinervaAI_Dell_Extractor.json"
+    not_mrf.write_text(json.dumps({"version": "1.0", "files": ["a", "b"]}))
+    with pytest.raises(ValueError, match="not a CMS price transparency file"):
+        pt.read_any(str(not_mrf))
+
+    zipped = tmp_path / "MinervaAI_Dell_Extractor.zip"
+    with zipfile.ZipFile(zipped, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"tool": "extractor"}))
+    with pytest.raises(ValueError, match="not a CMS price transparency file"):
+        pt.read_any(str(zipped))
+
+
+def test_a_real_mrf_json_is_still_accepted(json_mrf):
+    meta, rows = pt.read_any(json_mrf)
+    assert meta.layout == "json"
+    assert list(rows)

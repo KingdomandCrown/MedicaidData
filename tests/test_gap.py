@@ -210,7 +210,7 @@ def test_state_coverage_and_untouched_states(engine):
 # --- workbook -------------------------------------------------------------
 
 
-def test_write_xlsx_has_all_three_sheets(engine, tmp_path):
+def test_write_xlsx_has_every_sheet(engine, tmp_path):
     openpyxl = pytest.importorskip("openpyxl")
 
     with engine.begin() as conn:
@@ -232,6 +232,7 @@ def test_write_xlsx_has_all_three_sheets(engine, tmp_path):
         "Priority Systems",
         "Independents by State",
         "State Coverage",
+        "Unattributed Files",
     ]
 
     systems = book["Priority Systems"]
@@ -244,3 +245,59 @@ def test_write_xlsx_has_all_three_sheets(engine, tmp_path):
 
     coverage = book["State Coverage"]
     assert {coverage.cell(row=r, column=6).value for r in (2, 3)} == {"not started"}
+
+
+# --- files we hold but cannot attribute -----------------------------------
+
+
+def test_a_file_with_no_identifiers_is_reported_not_counted_either_way(engine):
+    """We have the data, but nothing to join it to — that must be visible.
+
+    Silently counting it as covered would hide a hospital we cannot query;
+    silently counting it as a gap would have someone download it twice.
+    """
+
+    with engine.begin() as conn:
+        conn.execute(insert(hospitals), [_hospital("040055", "National Park Medical Center", "AR")])
+        conn.execute(
+            insert(charge_sources),
+            [
+                dict(
+                    source_file="national-park-13200.csv",
+                    hospital_name=None,
+                    license_state=None,
+                    hospital_address=None,
+                    ein=None,
+                    primary_npi=None,
+                    charge_count=28005,
+                    ingested_at=NOW,
+                )
+            ],
+        )
+
+    report = build_gap_report(engine)
+    assert report.total_covered == 0
+    assert [u.source_file for u in report.unattributed] == ["national-park-13200.csv"]
+    assert report.unattributed[0].charge_count == 28005
+
+
+def test_attributed_sources_stay_out_of_the_unattributed_list(engine):
+    with engine.begin() as conn:
+        conn.execute(insert(hospitals), [_hospital("170001", "Sunflower General", "KS")])
+        conn.execute(insert(charge_sources), [_source("a.csv", "Sunflower General", "KS")])
+
+    assert build_gap_report(engine).unattributed == []
+
+
+def test_unattributed_files_are_listed_biggest_first(engine):
+    with engine.begin() as conn:
+        conn.execute(
+            insert(charge_sources),
+            [
+                _source("small.csv", None, None, count=100),
+                _source("big.csv", None, None, count=50_000),
+            ],
+        )
+
+    report = build_gap_report(engine)
+    assert [u.source_file for u in report.unattributed] == ["big.csv", "small.csv"]
