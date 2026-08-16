@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Who may see whose data. Copy to directory.json and keep it out of git.",
+    "Cloudflare Access decides who gets to the door (approved email + MFA);",
+    "this file decides which hospital's data they see once inside.",
+    "An email that reaches the app but is not listed here is denied, not defaulted.",
+    "Roles: org_viewer < org_member < org_admin < minerva_admin.",
+    "Only minerva_admin may hold org \"*\"."
+  ],
+
+  "cfo@prattregional.org": { "org": "pratt", "role": "org_admin" },
+  "ceo@prattregional.org": { "org": "pratt", "role": "org_admin" },
+  "analyst@prattregional.org": { "org": "pratt", "role": "org_member" },
+  "board@prattregional.org": { "org": "pratt", "role": "org_viewer" },
+
+  "jeff@minervaai.health": { "org": "*", "role": "minerva_admin" }
+}

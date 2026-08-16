@@ -21,3 +21,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# MinervaAI access control — never commit the real directory
+access/directory.json
