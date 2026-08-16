@@ -308,6 +308,23 @@ test("a directory entry missing org or role is rejected", () => {
   assert.throws(() => A.directoryFrom({ "a@b.c": { role: A.ROLES.ORG_MEMBER } }), /needs both/);
 });
 
+test("comment keys in the directory file are skipped", () => {
+  // JSON has no comments, so the shipped example carries a "_comment" key.
+  // Reading it as a person made the example file impossible to load.
+  const lookup = A.directoryFrom({
+    _comment: ["notes for whoever edits this"],
+    "cfo@prattregional.org": { org: "pratt", role: A.ROLES.ORG_ADMIN },
+  });
+  assert.deepEqual(lookup("cfo@prattregional.org"), { org: "pratt", role: A.ROLES.ORG_ADMIN });
+  assert.equal(lookup("_comment"), null);
+});
+
+test("the shipped example directory actually loads", () => {
+  const example = require(path.join(__dirname, "..", "directory.example.json"));
+  const lookup = A.directoryFrom(example);
+  assert.equal(lookup("jeff@minervaai.health").role, A.ROLES.MINERVA_ADMIN);
+});
+
 test("only minerva_admin may hold the wildcard org", () => {
   assert.throws(
     () => A.directoryFrom({ "a@b.c": { org: "*", role: A.ROLES.ORG_ADMIN } }),

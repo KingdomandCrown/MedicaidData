@@ -218,11 +218,16 @@ async function verifyAccessToken(token, { keys, teamDomain, aud, now = Date.now,
  *
  * Emails are compared lowercased. An entry with an unknown role is rejected at
  * build time rather than silently granting whatever the app happens to check.
+ *
+ * JSON has no comments, so keys beginning with `_` are treated as notes and
+ * skipped — a directory is a file humans edit, and it needs room to explain
+ * itself. An underscore is not legal at the start of an email address anyway.
  */
 function directoryFrom(mapping) {
   if (typeof mapping === "function") return mapping;
   const table = new Map();
   for (const [email, entry] of Object.entries(mapping || {})) {
+    if (email.startsWith("_")) continue;
     if (!entry || !entry.org || !entry.role) {
       throw new Error(`directory entry for ${email} needs both org and role`);
     }

@@ -10,6 +10,26 @@ Cloudflare Access  ──►  accessGuard  ──►  your routes
    (email + MFA)        (org + role)
 ```
 
+## Installing
+
+```bash
+bash access/install-access.sh --app ~/minerva            # check only, changes nothing
+bash access/install-access.sh --app ~/minerva --apply    # copy the modules in
+```
+
+The check pass reports the things that decide whether any of this holds: the
+server entry point, whether the app is bound to loopback or to every interface,
+and whether `ACCESS_AUD` / `ACCESS_TEAM_DOMAIN` are set. `--apply` copies the
+modules, creates `directory.json` if absent, backs up any existing `access/`
+directory, and writes a matching `rollback-access-<timestamp>.sh`.
+
+It deliberately does **not** edit your server file — guessing at an unseen
+server is how installers break working systems. It prints the lines to add and
+where.
+
+Rollback removes the modules and restores any backup. It leaves `directory.json`
+alone: that file is your customer list, not something an install created.
+
 ## Wiring it up
 
 ```js
