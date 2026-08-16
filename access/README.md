@@ -94,20 +94,57 @@ healthcare-topic guardrails: the prompt shapes behavior, the code enforces it.
 ## Peer benchmarking is a deliberate exception
 
 The CCR-vs-peers view only works by reading across organizations — that is the
-feature. It stays safe while a peer cannot be picked out of the cohort, so it
-needs a floor:
+feature. `benchmark.js` releases it without releasing anyone's numbers, on one
+distinction:
+
+- A **percentile rank** is a fact about *the subject*. "You sit at the 30th
+  percentile of Kansas CAHs" says nothing about any individual peer, at any
+  cohort size.
+- A **cohort statistic** is a fact about *the peers*. A median is somebody's
+  data, and on a small sample it is exactly one hospital's number.
+
+So the rank is the primary output and the quartile band is an extra, released
+only when the cohort is big enough to hide an individual inside it.
 
 ```js
-const { peerCohortIsSafe } = require("./access/access-control");
+const { buildPeerBenchmark, assertPredefinedCohort, COHORTS } = require("./access/benchmark");
 
-if (!peerCohortIsSafe(peers.length)) {
-  return { withheld: "too few peers to compare without identifying them" };
-}
+app.get("/api/benchmark/ccr", async (req, res) => {
+  assertPredefinedCohort(req.query.cohort);      // never a client-composed filter
+  const { subject, peers } = await db.ccrCohort({
+    org: orgFilter(req),
+    cohort: req.query.cohort,
+  });
+  res.json(buildPeerBenchmark({
+    subjectValue: subject,
+    peerValues: peers,                            // others only; never the subject
+    cohortLabel: "Kansas critical access hospitals",
+  }));
+});
 ```
 
-`MIN_PEER_COHORT` is 5, matching the Readiness module's gate on manager views.
-Show percentiles against a cohort; never name a peer. With four hospitals in the
-cohort, a percentile *is* a named competitor with extra steps.
+The response carries `cohortSize`, `yourValue`, `percentileRank`, and either a
+`band` or a `note` explaining what was withheld — no peer list, no minimum, no
+maximum. Three release levels:
+
+| Peers | Released |
+|---|---|
+| < 5 | nothing — `disclosure: "none"` |
+| 5–10 | rank only |
+| 11+ | rank + `{ p25, p50, p75 }` |
+
+Quartiles need the higher floor because they are order statistics: the median of
+seven values *is* the fourth hospital's number. Above the floor the interpolation
+positions sit well inside the cohort, so the extremes can never be published —
+and the extremes are the identifiable hospitals. A uniform cohort also withholds
+the band, since publishing the median of twelve identical values publishes all
+twelve.
+
+**Differencing is the trap this cannot close on its own.** Offering "Kansas CAHs"
+(n=6) next to "Kansas CAHs under 25 beds" (n=5) lets anyone subtract one from the
+other and isolate a single hospital. Cohorts must come from the fixed `COHORTS`
+set — `assertPredefinedCohort` rejects anything else with a 400. Never build a
+cohort from query-string filters.
 
 ## The directory
 
@@ -122,9 +159,11 @@ is built.
 ## Tests
 
 ```bash
-node --test access/test/access-control.test.js
+node --test "access/test/*.test.js"
 ```
 
-31 tests, no dependencies. The interesting ones are the denials — forged
+49 tests, no dependencies. The interesting ones are the denials — forged
 signature, `alg: none`, wrong audience, wrong team, expired, unprovisioned
-email, unreachable key endpoint — since those are what protect the pilot.
+email, unreachable key endpoint — since those are what protect the pilot. The
+benchmark suite adds the negative property: whatever the cohort looks like, the
+response carries no peer list and neither extreme.
