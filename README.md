@@ -158,6 +158,9 @@ it, and JSON parsed iteratively — so a 340 MB (or multi-GB) file stays memory-
 and disk-friendly. Each file is keyed by its **EIN** (from the filename) and,
 for CSV files, its **organizational NPI** (from the metadata); these are the
 join keys back to the POS hospitals (see [linking](#linking-charges-to-pos-hospitals)).
+Some systems name files `<ein>-<npi>_<name>`, and an upload may prepend a hex
+hash. Only a prefix containing a hex *letter* is treated as a hash — a leading
+run of digits is an identifier, not noise.
 JSON files often omit the NPI, so they link by name + state or an EIN-based
 crosswalk.
 

@@ -148,12 +148,11 @@ def ein_from_filename(path: str) -> str | None:
     """Extract the 9-digit EIN from a CMS-convention MRF filename.
 
     CMS names files ``<ein>_<hospital-name>_standardcharges.<ext>``. The EIN may
-    be written with a dash (``24-0795959``) or without (``386006309``). Uploads
-    sometimes prepend a hex hash (``<hash>-<ein>_...``), which we strip first.
+    be written with a dash (``24-0795959``) or without (``386006309``), and some
+    systems prefix the organizational NPI too: ``<ein>-<npi>_<name>``.
     """
 
-    base = os.path.basename(path)
-    base = re.sub(r"^[0-9a-f]{6,}-", "", base, count=1)  # drop upload hash
+    base = _strip_hash_prefix(path)
     match = _EIN_RE.match(base) or _EIN_RE.search(base)
     if match:
         return match.group(1) + match.group(2)
@@ -167,8 +166,16 @@ def _without_gz(path: str) -> str:
     return path[:-3] if path.lower().endswith(".gz") else path
 
 
+# An upload hash is hexadecimal, so it almost always contains a letter. A
+# leading run of digits is not a hash — it is the EIN, and sometimes an EIN
+# followed by the organizational NPI (``261947374-1659559573_name``). Requiring
+# a letter keeps the stripper off real identifiers: without it, St. Luke's
+# Sugar Land lost its EIN 261947374 and was filed under a mangled NPI instead.
+_UPLOAD_HASH_RE = re.compile(r"^(?=[0-9a-f]*[a-f])[0-9a-f]{6,}-")
+
+
 def _strip_hash_prefix(name: str) -> str:
-    return re.sub(r"^[0-9a-f]{6,}-", "", os.path.basename(name), count=1)
+    return _UPLOAD_HASH_RE.sub("", os.path.basename(name), count=1)
 
 
 # --- file opening ---------------------------------------------------------
