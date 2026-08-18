@@ -26,6 +26,7 @@ from sqlalchemy.exc import OperationalError
 from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
+from .coverage import coverage_for
 from .crosswalk import fetch_crosswalk
 from .db import count_charges, count_hospitals, make_engine
 from .duplicates import find_duplicate_loads, prune_redownloads
@@ -225,6 +226,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--recursive",
         action="store_true",
         help="Descend into subdirectories, mirroring their layout at the destination.",
+    )
+
+    cov = sub.add_parser(
+        "coverage",
+        help="Show what the database holds for one hospital or system by name.",
+    )
+    cov.add_argument("pattern", help="Part of a hospital, system, or file name.")
+    cov.add_argument("--database-url", default=DEFAULT_DB_URL)
+    cov.add_argument("--state", default=None, help="Restrict hospitals to this state.")
+    cov.add_argument(
+        "--limit", type=int, default=25, help="Rows to list per section (default: 25)."
     )
 
     scan = sub.add_parser(
@@ -576,6 +588,43 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    report = coverage_for(engine, args.pattern, state=args.state)
+
+    print(f"\n{report.diagnosis}.")
+
+    if report.sources:
+        print(
+            f"\nCharge files matching {args.pattern!r}: {len(report.sources)} "
+            f"({len(report.linked_sources)} linked, {len(report.unlinked_sources)} not), "
+            f"{report.charge_rows:,} rows."
+        )
+        for src in report.sources[: args.limit]:
+            where = f"CCN {src.ccn} via {src.link_method}" if src.is_linked else "UNLINKED"
+            print(f"  {src.charge_count:>12,} rows  {where:<28}  {src.source_file}")
+        if len(report.sources) > args.limit:
+            print(f"  ... and {len(report.sources) - args.limit} more")
+        if report.unlinked_rows:
+            print(
+                f"\n  {report.unlinked_rows:,} row(s) sit in files with no CCN. "
+                "Run fetch-crosswalk, backfill-npis, then link-charges."
+            )
+
+    if report.hospitals:
+        print(
+            f"\nHospitals matching {args.pattern!r}: {len(report.hospitals)} "
+            f"({len(report.covered_hospitals)} with a file)."
+        )
+        for hosp in report.hospitals[: args.limit]:
+            mark = f"{hosp.charge_rows:,} rows" if hosp.is_covered else "no file"
+            print(f"  {hosp.ccn}  {hosp.state or '--'}  {mark:>16}  {hosp.name}")
+        if len(report.hospitals) > args.limit:
+            print(f"  ... and {len(report.hospitals) - args.limit} more")
+
+    return 0
+
+
 def _cmd_scan_ingested(args: argparse.Namespace) -> int:
     summary = scan_for_ingested(args.paths, database_url=args.database_url)
 
@@ -743,6 +792,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_backfill_npis(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
+    if args.command == "coverage":
+        return _cmd_coverage(args)
     if args.command == "scan-ingested":
         return _cmd_scan_ingested(args)
     if args.command == "gap-report":

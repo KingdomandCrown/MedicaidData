@@ -445,6 +445,12 @@ hospitals repair-eins [options]
   --sources-only           Fix charge_sources only; leave the charge rows for later
   --limit N                Sources to list (default: 40)
 
+hospitals coverage PATTERN [options]
+  PATTERN                  Part of a hospital, system, or file name
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --state ST               Restrict matching hospitals to one state
+  --limit N                Rows to list per section (default: 25)
+
 hospitals scan-ingested [PATH ...] [options]
   PATH ...                 Folders to walk (default: ~/Desktop ~/Downloads ~/Documents)
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
