@@ -108,8 +108,13 @@ def test_a_gz_in_the_folder_is_picked_up_by_a_batch(tmp_path):
     assert all(s.charges_loaded == 3 for s in summaries)
 
 
-def test_subdirectories_are_not_reported_as_unsupported(tmp_path, caplog):
-    # round 6 sits beside round 5; a sibling folder is not a dropped file.
+def test_a_subdirectory_is_reported_but_not_as_a_bad_file(tmp_path, caplog):
+    """A folder is skipped by design, but it is still named.
+
+    It must not be counted among the unreadable files either — a sibling round
+    folder is a deliberate skip, not a defect.
+    """
+
     folder = tmp_path / "round6"
     folder.mkdir()
     (folder / "nested").mkdir()
@@ -118,7 +123,10 @@ def test_subdirectories_are_not_reported_as_unsupported(tmp_path, caplog):
     db_url = f"sqlite:///{tmp_path / 'r6.sqlite'}"
     with caplog.at_level("WARNING"):
         ingest_charge_path(str(folder), database_url=db_url)
-    assert "nested" not in caplog.text
+
+    assert "nested" in caplog.text
+    assert "Not descending" in caplog.text
+    assert "unsupported type" not in caplog.text
 
 
 def test_gz_is_in_the_supported_list():
@@ -131,3 +139,55 @@ def test_a_folder_of_only_unreadable_files_raises(tmp_path):
     (folder / "a.crdownload").write_text("x")
     with pytest.raises(FileNotFoundError, match="no .*files in directory"):
         ingest_charge_path(str(folder), database_url=f"sqlite:///{tmp_path / 'x.sqlite'}")
+
+
+# --- subdirectories -------------------------------------------------------
+
+
+def test_a_skipped_subdirectory_is_named(tmp_path, caplog):
+    """A system's folder of facilities must not vanish without a word.
+
+    Round 6 arrived as a flat set of files plus an "HCA" folder holding the
+    system's facilities. Skipping it silently would have lost ~180 hospitals
+    and looked like a clean run.
+    """
+
+    folder = tmp_path / "round6"
+    (folder / "HCA").mkdir(parents=True)
+    shutil.copy(TALL, folder / "111111111_flat_standardcharges.csv")
+    shutil.copy(TALL, folder / "HCA" / "222222222_hca_standardcharges.csv")
+
+    db_url = f"sqlite:///{tmp_path / 'r6.sqlite'}"
+    with caplog.at_level("WARNING"):
+        summaries = ingest_charge_path(str(folder), database_url=db_url)
+
+    assert [s.ein for s in summaries] == ["111111111"]
+    assert "HCA" in caplog.text
+    assert "--recursive" in caplog.text
+    assert "never entered" in caplog.text
+
+
+def test_recursive_reaches_a_systems_folder(tmp_path):
+    folder = tmp_path / "round6"
+    (folder / "HCA").mkdir(parents=True)
+    shutil.copy(TALL, folder / "111111111_flat_standardcharges.csv")
+    shutil.copy(TALL, folder / "HCA" / "222222222_hca_standardcharges.csv")
+    shutil.copy(TALL, folder / "HCA" / "333333333_hca_two_standardcharges.csv")
+
+    db_url = f"sqlite:///{tmp_path / 'r6.sqlite'}"
+    summaries = ingest_charge_path(str(folder), database_url=db_url, recursive=True)
+
+    assert sorted(s.ein for s in summaries) == ["111111111", "222222222", "333333333"]
+    assert all(s.charges_loaded == 3 for s in summaries)
+
+
+def test_recursive_still_reports_unsupported_files_from_below(tmp_path, caplog):
+    folder = tmp_path / "round6"
+    (folder / "HCA").mkdir(parents=True)
+    shutil.copy(TALL, folder / "HCA" / "222222222_hca_standardcharges.csv")
+    (folder / "HCA" / "Unconfirmed 900001.crdownload").write_text("partial")
+
+    db_url = f"sqlite:///{tmp_path / 'r6.sqlite'}"
+    with caplog.at_level("WARNING"):
+        ingest_charge_path(str(folder), database_url=db_url, recursive=True)
+    assert "Unconfirmed 900001.crdownload" in caplog.text

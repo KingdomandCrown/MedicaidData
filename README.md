@@ -152,6 +152,12 @@ join keys back to the POS hospitals (see [linking](#linking-charges-to-pos-hospi
 JSON files often omit the NPI, so they link by name + state or an EIN-based
 crosswalk.
 
+A **subdirectory** is not descended into by default — a round folder usually
+sits beside its siblings — but it is named in the log, before and after the
+run, with a pointer to `--recursive`. Large systems arrive as a folder of
+facilities, and a silently skipped folder is a hundred missing hospitals that
+look exactly like a clean run.
+
 A file whose extension the ingester does not recognize is **named in the log**
 before the run starts and counted again at the end, rather than passed over in
 silence. A half-finished `.crdownload` sitting in a download folder looks
@@ -282,6 +288,7 @@ hospitals ingest-charges PATH [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Cap on items (data rows) read per file
   --skip-existing          Skip files already loaded (resumable batches)
+  --recursive              Descend into subdirectories (a system's facilities)
   --continue-on-error      Log and skip failing files; report them at the end
   --echo-sql               Echo SQL statements (debugging)
 

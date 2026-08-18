@@ -110,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip files already loaded (makes a large batch resumable).",
     )
     charges.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Descend into subdirectories (a system's facilities often arrive in one).",
+    )
+    charges.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Keep going when a file fails; report the failures at the end.",
@@ -229,6 +234,7 @@ def _cmd_ingest_charges(args: argparse.Namespace) -> int:
             echo_sql=args.echo_sql,
             skip_existing=args.skip_existing,
             continue_on_error=args.continue_on_error,
+            recursive=args.recursive,
         )
     except FileNotFoundError as exc:
         log.error("File not found: %s", exc)

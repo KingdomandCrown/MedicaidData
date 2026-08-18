@@ -80,6 +80,7 @@ def ingest_charge_path(
     echo_sql: bool = False,
     skip_existing: bool = False,
     continue_on_error: bool = False,
+    recursive: bool = False,
 ) -> list[ChargeIngestSummary]:
     """Ingest a single file, or every supported file in a directory.
 
@@ -87,6 +88,12 @@ def ingest_charge_path(
     matter at that scale: ``skip_existing`` makes the run resumable (files
     already loaded are left alone), and ``continue_on_error`` keeps one
     malformed file from ending the batch.
+
+    ``recursive`` descends into subdirectories, which large systems arrive in
+    — a folder per system, a file per facility. It is off by default because a
+    round folder usually sits beside its siblings and descending would re-read
+    them. Note that files are keyed by base name, so the same file name in two
+    subdirectories is one hospital as far as the database is concerned.
     """
 
     # Check the target up front: a mistyped folder is not a per-file failure,
@@ -96,10 +103,20 @@ def ingest_charge_path(
         raise FileNotFoundError(path)
 
     ignored: list[str] = []
+    subdirs: list[str] = []
     if os.path.isdir(path):
         files = []
-        for entry in sorted(glob.glob(os.path.join(path, "*"))):
+        if recursive:
+            entries = sorted(
+                os.path.join(root, name)
+                for root, _dirs, names in os.walk(path)
+                for name in names
+            )
+        else:
+            entries = sorted(glob.glob(os.path.join(path, "*")))
+        for entry in entries:
             if os.path.isdir(entry):
+                subdirs.append(os.path.basename(entry))
                 continue
             if entry.lower().endswith(SUPPORTED):
                 files.append(entry)
@@ -127,6 +144,16 @@ def ingest_charge_path(
         log.warning("Ignoring %d file(s) of unsupported type:", len(ignored))
         for name in ignored:
             log.warning("  %s", name)
+    # A folder of a system's facilities looks exactly like a sibling round
+    # folder from here, so say which ones are being left rather than assuming.
+    if subdirs:
+        log.warning(
+            "Not descending into %d subdirector%s: %s",
+            len(subdirs),
+            "y" if len(subdirs) == 1 else "ies",
+            ", ".join(subdirs),
+        )
+        log.warning("  pass --recursive to include them")
 
     total = len(files)
     summaries: list[ChargeIngestSummary] = []
@@ -165,5 +192,12 @@ def ingest_charge_path(
     if ignored:
         log.warning(
             "%d file(s) were not an ingestible type and were never read", len(ignored)
+        )
+    if subdirs:
+        log.warning(
+            "%d subdirector%s never entered: %s",
+            len(subdirs),
+            "y was" if len(subdirs) == 1 else "ies were",
+            ", ".join(subdirs),
         )
     return summaries
