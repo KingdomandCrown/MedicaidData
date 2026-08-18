@@ -18,6 +18,7 @@ tells them apart:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, or_, select
@@ -112,6 +113,23 @@ class CoverageReport:
         return f"all {len(self.hospitals)} matching hospital(s) have a file"
 
 
+def _boundary_re(pattern: str) -> re.Pattern:
+    """Match ``pattern`` only where a word starts.
+
+    A plain substring search for "hca" also matches heal**thca**re, so asking
+    about HCA returned Adventist HealthCare, Barrett Hospital & Healthcare and
+    172 others — a list with no information in it. Word starts are what a
+    person means: separators here include the hyphens and underscores that
+    hold a filename together, not just spaces.
+    """
+
+    return re.compile(r"(?<![a-z0-9])" + re.escape(pattern.lower().strip()))
+
+
+def _matches(needle: re.Pattern, *fields: str | None) -> bool:
+    return any(needle.search((f or "").lower()) for f in fields)
+
+
 def coverage_for(
     engine: Engine, pattern: str, *, state: str | None = None, limit: int = 200
 ) -> CoverageReport:
@@ -119,9 +137,12 @@ def coverage_for(
 
     Matched case-insensitively against the hospital name, the name recorded in
     the charge file, and the filename — a system-published file often names the
-    system in one and the facility in another.
+    system in one and the facility in another. The database narrows with a
+    substring search; the word-boundary test is applied to what comes back,
+    because SQL LIKE cannot express "where a word starts".
     """
 
+    needle = _boundary_re(pattern)
     like = f"%{pattern.lower()}%"
     report = CoverageReport(pattern=pattern)
 
@@ -140,7 +161,9 @@ def coverage_for(
                 func.lower(charge_sources.c.hospital_name).like(like),
             )
         )
-        for row in conn.execute(source_stmt.limit(limit)).mappings():
+        for row in conn.execute(source_stmt).mappings():
+            if not _matches(needle, row["source_file"], row["hospital_name"]):
+                continue
             report.sources.append(
                 SourceRow(
                     source_file=row["source_file"],
@@ -180,7 +203,9 @@ def coverage_for(
         if state:
             hosp_stmt = hosp_stmt.where(hospitals.c.state == state.upper())
 
-        for row in conn.execute(hosp_stmt.limit(limit)).mappings():
+        for row in conn.execute(hosp_stmt).mappings():
+            if not _matches(needle, row["name"]):
+                continue
             report.hospitals.append(
                 HospitalRow(
                     ccn=row["ccn"],
@@ -193,6 +218,8 @@ def coverage_for(
 
     report.sources.sort(key=lambda s: -s.charge_count)
     report.hospitals.sort(key=lambda h: (h.is_covered, h.name))
+    del report.sources[limit:]
+    del report.hospitals[limit:]
 
     log.info(
         "Coverage for %r: %d file(s) (%d linked), %d matching hospital(s) (%d covered)",

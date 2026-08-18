@@ -167,3 +167,55 @@ def test_totals_add_up(engine):
     report = coverage_for(engine, "hca")
     assert report.charge_rows == 3500
     assert report.unlinked_rows == 2500
+
+
+# --- matching a word, not a fragment of one -------------------------------
+
+
+def test_hca_does_not_match_healthcare(engine):
+    """Searching 'hca' returned 174 hospitals: heal-THCA-re matches too.
+
+    Adventist HealthCare, Barrett Hospital & Healthcare, Jefferson Healthcare —
+    a list with no information in it.
+    """
+
+    _hospital(engine, "210060", "ADVENTIST HEALTHCARE FORT WASHINGTON")
+    _hospital(engine, "501323", "JEFFERSON HEALTHCARE", state="WA")
+    _hospital(engine, "100080", "HCA FLORIDA JFK HOSPITAL")
+
+    names = [h.name for h in coverage_for(engine, "hca").hospitals]
+    assert names == ["HCA FLORIDA JFK HOSPITAL"]
+
+
+def test_a_word_after_a_hyphen_or_underscore_still_matches(engine):
+    """Filenames are held together by punctuation, not spaces."""
+
+    _source(engine, "62-1694180_HCA-FLORIDA-JFK-HOSPITAL_standardcharges.json", name="HCA")
+
+    assert len(coverage_for(engine, "hca").sources) == 1
+    assert len(coverage_for(engine, "florida").sources) == 1
+    assert len(coverage_for(engine, "jfk").sources) == 1
+
+
+def test_a_multi_word_phrase_still_matches(engine):
+    _hospital(engine, "100080", "HCA FLORIDA JFK HOSPITAL")
+    assert len(coverage_for(engine, "hca florida").hospitals) == 1
+
+
+def test_a_fragment_inside_a_word_finds_nothing(engine):
+    _hospital(engine, "100080", "HCA FLORIDA JFK HOSPITAL")
+    assert coverage_for(engine, "lorida").hospitals == []
+
+
+def test_a_pattern_with_regex_characters_is_taken_literally(engine):
+    _hospital(engine, "100080", "ST. LUKE'S HOSPITAL")
+    assert len(coverage_for(engine, "st.").hospitals) == 1
+    assert coverage_for(engine, "st?").hospitals == []
+
+
+def test_the_limit_applies_after_sorting(engine):
+    for n in range(5):
+        _source(engine, f"hca-{n}.json", name="HCA", count=n * 100)
+
+    sources = coverage_for(engine, "hca", limit=2).sources
+    assert [s.charge_count for s in sources] == [400, 300]
