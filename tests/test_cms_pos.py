@@ -147,3 +147,147 @@ def test_a_caller_supplied_accept_header_is_respected():
     custom = requests.Session()
     custom.headers["Accept"] = "application/vnd.api+json"
     assert cms_pos._session(custom).headers["Accept"] == "application/vnd.api+json"
+
+
+# --- discovery across catalogs --------------------------------------------
+
+DCAT_PAYLOAD = {
+    "dataset": [
+        {"title": "Something Else", "identifier": "x", "distribution": []},
+        {
+            "title": "Provider of Services File - Hospital & Non-Hospital Facilities",
+            "identifier": "pos-series",
+            "modified": "2026-04-01",
+            "distribution": [
+                {"downloadURL": "https://data.cms.gov/pos-2026-01.csv",
+                 "mediaType": "text/csv", "modified": "2026-01-15"},
+                {"downloadURL": "https://data.cms.gov/pos-2026-04.csv",
+                 "mediaType": "text/csv", "modified": "2026-04-01"},
+                {"accessURL": "https://data.cms.gov/pos-dictionary.pdf",
+                 "mediaType": "application/pdf"},
+            ],
+        },
+    ]
+}
+
+DKAN_PAYLOAD = [
+    {
+        "title": "Provider of Services File - Hospital & Non-Hospital Facilities",
+        "identifier": "pos-series",
+        "modified": "2026-04-01",
+        "distribution": [
+            {"data": {"identifier": "uuid-old", "modified": "2026-01-15"}},
+            {"data": {"identifier": "uuid-new", "modified": "2026-04-01"}},
+        ],
+    }
+]
+
+HTML_PAGE = "<!DOCTYPE html><html><title>CMS Data</title>"
+
+
+def _catalog_session(responses):
+    """A session mapping URL -> _FakeResponse."""
+
+    class _S:
+        def __init__(self):
+            self.headers = {}
+            self.seen = []
+
+        def get(self, url, params=None, timeout=None):
+            self.seen.append(url)
+            return responses[url]
+
+    return _S()
+
+
+def test_the_dcat_catalog_yields_the_newest_csv():
+    from hospitals import cms_pos
+
+    dists = cms_pos._from_dcat(DCAT_PAYLOAD, cms_pos.POS_DATASET_TITLE, "cat")
+    assert len(dists) == 2  # the PDF is not a distribution we can read
+    assert all(d.distribution_id is None for d in dists)
+    assert all(d.has_data_api is False for d in dists)
+
+
+def test_a_dcat_entry_without_an_id_still_knows_where_the_file_is():
+    from hospitals import cms_pos
+
+    import pytest
+
+    d = cms_pos._from_dcat(DCAT_PAYLOAD, cms_pos.POS_DATASET_TITLE, "cat")[0]
+    assert d.download_url.endswith(".csv")
+    # Asking for a data-api URL it does not have must say so, not build a
+    # plausible one ending in "/None/data".
+    with pytest.raises(LookupError, match="no data-api identifier"):
+        d.data_api_url
+
+
+def test_discovery_falls_through_a_retired_endpoint_to_a_live_one():
+    """CMS retired /api/1/metastore/ — it answers with the portal's own HTML."""
+
+    from hospitals import cms_pos
+
+    retired = "https://data.cms.gov/api/1/metastore/schemas/dataset/items"
+    live = "https://data.cms.gov/data.json"
+    session = _catalog_session({
+        retired: _FakeResponse(200, HTML_PAGE, "text/html"),
+        live: _FakeResponse(200, __import__("json").dumps(DCAT_PAYLOAD), "application/json"),
+    })
+
+    latest = cms_pos.discover_latest_distribution(
+        session=session,
+        catalogs=((retired, None, "dkan"), (live, None, "dcat")),
+    )
+
+    assert latest.modified == "2026-04-01"
+    assert latest.download_url.endswith("pos-2026-04.csv")
+    assert session.seen == [retired, live]
+
+
+def test_a_data_api_catalog_is_preferred_when_it_answers_first():
+    from hospitals import cms_pos
+
+    url = "https://example.test/dkan"
+    session = _catalog_session(
+        {url: _FakeResponse(200, __import__("json").dumps(DKAN_PAYLOAD), "application/json")}
+    )
+
+    latest = cms_pos.discover_latest_distribution(
+        session=session, catalogs=((url, None, "dkan"),)
+    )
+
+    assert latest.distribution_id == "uuid-new"
+    assert latest.has_data_api is True
+    assert latest.data_api_url.endswith("/uuid-new/data")
+
+
+def test_every_catalog_tried_is_named_when_none_holds_the_dataset():
+    import pytest
+
+    from hospitals import cms_pos
+
+    a, b = "https://example.test/a", "https://example.test/b"
+    session = _catalog_session({
+        a: _FakeResponse(200, "[]", "application/json"),
+        b: _FakeResponse(200, '{"dataset": []}', "application/json"),
+    })
+
+    with pytest.raises(LookupError) as excinfo:
+        cms_pos.discover_latest_distribution(
+            session=session, catalogs=((a, None, "dkan"), (b, None, "dcat"))
+        )
+
+    message = str(excinfo.value)
+    assert a in message and b in message
+
+
+def test_unreachable_everywhere_is_reported_as_unavailable_not_missing():
+    import pytest
+
+    from hospitals import cms_pos
+
+    a = "https://example.test/a"
+    session = _catalog_session({a: _FakeResponse(503, "down", "text/plain")})
+
+    with pytest.raises(cms_pos.CmsUnavailableError, match="no CMS catalog could be reached"):
+        cms_pos.discover_latest_distribution(session=session, catalogs=((a, None, "dkan"),))
