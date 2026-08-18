@@ -252,8 +252,20 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    except KeyError as exc:
-        log.error("Unknown state: %s", exc)
+    except LookupError as exc:
+        # CMS renamed or withdrew the dataset. The catalogs answered; the
+        # dataset was not in them. Printing the message beats a traceback,
+        # because the message names the titles CMS is actually publishing.
+        if isinstance(exc, KeyError):
+            log.error("Unknown state: %s", exc)
+            return 2
+        log.error("Ingestion failed — dataset not found: %s", exc)
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        print(
+            "\nIf CMS has renamed the dataset, download the POS CSV from "
+            "data.cms.gov and pass --input-file.",
+            file=sys.stderr,
+        )
         return 2
 
     print(

@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import io
 import itertools
+import re
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
@@ -147,15 +148,75 @@ def _get_json(url: str, params: dict | None, session: requests.Session):
         ) from exc
 
 
+def _normalize_title(title: str | None) -> str:
+    """Lowercase, with every run of punctuation flattened to one space.
+
+    CMS's own rendering of this title varies: a hyphen becomes an en dash, an
+    ampersand becomes "and", a colon replaces the dash. A substring match on
+    the literal string fails on any of those while a human reads the two
+    titles as identical.
+    """
+
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+# The part of the title that identifies the dataset regardless of how CMS
+# renders the rest of it.
+POS_TITLE_CORE = "provider of services"
+
+
 def _matching_datasets(items, dataset_title: str) -> list[dict]:
-    """Datasets whose title is, or contains, the one we want."""
+    """Datasets whose title is the one we want, matched from strict to loose.
+
+    Four tiers, stopping at the first that finds anything: the exact string;
+    the same title once punctuation is normalized; a title containing every
+    word of ours (so an added "Q1 2026" still matches); and finally any title
+    carrying the core phrase. Each step gives up a little precision, so the
+    order matters — a stricter match is never passed over for a looser one.
+    """
 
     exact = [it for it in items if it.get("title") == dataset_title]
     if exact:
         return exact
-    # A looser contains-match, in case CMS retitles slightly.
-    needle = dataset_title.lower()
-    return [it for it in items if needle in (it.get("title") or "").lower()]
+
+    target = _normalize_title(dataset_title)
+    normalized = [(it, _normalize_title(it.get("title"))) for it in items]
+
+    same = [it for it, norm in normalized if norm == target]
+    if same:
+        return same
+
+    wanted = set(target.split())
+    superset = [it for it, norm in normalized if wanted <= set(norm.split())]
+    if superset:
+        return superset
+
+    return [it for it, norm in normalized if POS_TITLE_CORE in norm]
+
+
+def _near_miss_titles(payload) -> list[str]:
+    """Titles that mention the core phrase, for a failure message.
+
+    When nothing matches, the useful thing is not that the search failed but
+    what CMS is calling the dataset now.
+    """
+
+    if isinstance(payload, dict):
+        items = payload.get("dataset") or []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        return []
+
+    return sorted(
+        {
+            it.get("title")
+            for it in items
+            if isinstance(it, dict)
+            and POS_TITLE_CORE in _normalize_title(it.get("title"))
+            and it.get("title")
+        }
+    )
 
 
 def _from_dkan(payload, dataset_title: str, catalog: str) -> list[PosDistribution]:
@@ -245,6 +306,7 @@ def discover_latest_distribution(
 
     sess = _session(session)
     attempts: list[str] = []
+    near_miss: set[str] = set()
     reachable = False
 
     for url, params, shape in catalogs:
@@ -258,7 +320,12 @@ def discover_latest_distribution(
         reachable = True
         candidates = _SHAPES[shape](payload, dataset_title, url)
         if not candidates:
-            attempts.append(f"{url}: reachable, but no usable POS distribution")
+            near = _near_miss_titles(payload)
+            near_miss.update(near)
+            attempts.append(
+                f"{url}: reachable, but no usable POS distribution"
+                + (f" (closest titles: {'; '.join(near[:3])})" if near else "")
+            )
             continue
 
         candidates.sort(key=lambda d: (d.modified or ""), reverse=True)
@@ -276,8 +343,14 @@ def discover_latest_distribution(
     detail = "; ".join(attempts) or "no catalogs configured"
     if not reachable:
         raise CmsUnavailableError(f"no CMS catalog could be reached — {detail}")
+    hint = ""
+    if near_miss:
+        hint = (
+            " CMS appears to publish it under a different title now; set "
+            "POS_DATASET_TITLE to one of: " + "; ".join(sorted(near_miss)[:5])
+        )
     raise LookupError(
-        f"POS dataset {dataset_title!r} not found in any CMS catalog — {detail}"
+        f"POS dataset {dataset_title!r} not found in any CMS catalog — {detail}.{hint}"
     )
 
 

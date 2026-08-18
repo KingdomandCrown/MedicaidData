@@ -291,3 +291,94 @@ def test_unreachable_everywhere_is_reported_as_unavailable_not_missing():
 
     with pytest.raises(cms_pos.CmsUnavailableError, match="no CMS catalog could be reached"):
         cms_pos.discover_latest_distribution(session=session, catalogs=((a, None, "dkan"),))
+
+
+# --- a renamed dataset ----------------------------------------------------
+
+
+def test_punctuation_differences_do_not_hide_the_dataset():
+    """CMS renders this title several ways; a human reads them as identical."""
+
+    from hospitals import cms_pos
+
+    for title in [
+        "Provider of Services File – Hospital & Non-Hospital Facilities",  # en dash
+        "Provider of Services File: Hospital & Non-Hospital Facilities",
+        "Provider of Services File - Hospital and Non-Hospital Facilities",
+        "provider of services file  hospital  non hospital facilities",
+    ]:
+        items = [{"title": title, "identifier": "x", "distribution": []}]
+        assert cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE), title
+
+
+def test_an_appended_edition_still_matches():
+    from hospitals import cms_pos
+
+    items = [{
+        "title": "Provider of Services File - Hospital & Non-Hospital Facilities, Q1 2026",
+        "identifier": "x",
+    }]
+    assert cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE)
+
+
+def test_a_shortened_title_matches_on_the_core_phrase():
+    from hospitals import cms_pos
+
+    items = [{"title": "Provider of Services File", "identifier": "x"}]
+    assert cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE)
+
+
+def test_an_exact_match_wins_over_a_looser_one():
+    from hospitals import cms_pos
+
+    items = [
+        {"title": "Provider of Services File", "identifier": "loose"},
+        {"title": cms_pos.POS_DATASET_TITLE, "identifier": "exact"},
+    ]
+    assert [i["identifier"] for i in cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE)] == ["exact"]
+
+
+def test_an_unrelated_dataset_is_not_matched():
+    from hospitals import cms_pos
+
+    items = [{"title": "Hospital Provider Cost Report", "identifier": "x"}]
+    assert cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE) == []
+
+
+def test_the_failure_names_the_titles_cms_is_actually_publishing():
+    """The useful fact is not that the search failed but what it is called now."""
+
+    import json
+
+    import pytest
+
+    from hospitals import cms_pos
+
+    payload = {"dataset": [
+        {"title": "Provider of Services File Extract", "identifier": "a",
+         "distribution": [{"downloadURL": "x.pdf", "mediaType": "application/pdf"}]},
+        {"title": "Medicare Enrollment", "identifier": "b"},
+    ]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    with pytest.raises(LookupError) as excinfo:
+        cms_pos.discover_latest_distribution(
+            session=session,
+            dataset_title="Something Nobody Publishes",
+            catalogs=((url, None, "dcat"),),
+        )
+
+    message = str(excinfo.value)
+    assert "Provider of Services File Extract" in message
+    assert "Medicare Enrollment" not in message
+
+
+def test_near_miss_titles_read_both_catalog_shapes():
+    from hospitals import cms_pos
+
+    dcat = {"dataset": [{"title": "Provider of Services File Extract"}]}
+    dkan = [{"title": "Provider of Services File Extract"}]
+    assert cms_pos._near_miss_titles(dcat) == ["Provider of Services File Extract"]
+    assert cms_pos._near_miss_titles(dkan) == ["Provider of Services File Extract"]
+    assert cms_pos._near_miss_titles("nonsense") == []
