@@ -23,6 +23,11 @@ from .logging_config import get_logger
 
 log = get_logger(__name__)
 
+# Extensions the ingester understands. ``.gz`` covers gzipped CSV and JSON,
+# which large systems use for multi-gigabyte exports; they are decompressed on
+# the fly rather than unpacked to disk.
+SUPPORTED = (".csv", ".zip", ".json", ".xlsx", ".xlsm", ".gz")
+
 
 @dataclass
 class ChargeIngestSummary:
@@ -90,14 +95,20 @@ def ingest_charge_path(
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
+    ignored: list[str] = []
     if os.path.isdir(path):
-        files = sorted(
-            f
-            for f in glob.glob(os.path.join(path, "*"))
-            if f.lower().endswith((".csv", ".zip", ".json", ".xlsx", ".xlsm"))
-        )
+        files = []
+        for entry in sorted(glob.glob(os.path.join(path, "*"))):
+            if os.path.isdir(entry):
+                continue
+            if entry.lower().endswith(SUPPORTED):
+                files.append(entry)
+            else:
+                ignored.append(os.path.basename(entry))
         if not files:
-            raise FileNotFoundError(f"no .csv/.zip/.json/.xlsx files in directory: {path}")
+            raise FileNotFoundError(
+                f"no {'/'.join(SUPPORTED)} files in directory: {path}"
+            )
     else:
         files = [path]
 
@@ -108,6 +119,14 @@ def ingest_charge_path(
     done: set[str] = set()
     if skip_existing:
         done = loaded_source_files(engine)
+
+    # An unrecognized extension used to be dropped without a word, which is how
+    # a half-finished .crdownload cost us a hospital in an earlier batch. Say
+    # what is being left behind before the run starts.
+    if ignored:
+        log.warning("Ignoring %d file(s) of unsupported type:", len(ignored))
+        for name in ignored:
+            log.warning("  %s", name)
 
     total = len(files)
     summaries: list[ChargeIngestSummary] = []
@@ -143,4 +162,8 @@ def ingest_charge_path(
         log.warning("%d file(s) failed:", len(failed))
         for name, err in failed:
             log.warning("  %s: %s", name, err)
+    if ignored:
+        log.warning(
+            "%d file(s) were not an ingestible type and were never read", len(ignored)
+        )
     return summaries

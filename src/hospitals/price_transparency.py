@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import gzip
 import io
 import os
 import re
@@ -160,6 +161,12 @@ def ein_from_filename(path: str) -> str | None:
     return fallback.group(0) if fallback else None
 
 
+def _without_gz(path: str) -> str:
+    """Path with a trailing ``.gz`` removed, for extension tests."""
+
+    return path[:-3] if path.lower().endswith(".gz") else path
+
+
 def _strip_hash_prefix(name: str) -> str:
     return re.sub(r"^[0-9a-f]{6,}-", "", os.path.basename(name), count=1)
 
@@ -191,7 +198,8 @@ def detect_encoding(sample: bytes) -> str:
 
 
 def _sniff_file(path: str) -> str:
-    with open(path, "rb") as fh:
+    opener = gzip.open if path.lower().endswith(".gz") else open
+    with opener(path, "rb") as fh:
         return detect_encoding(fh.read(_SNIFF_BYTES))
 
 
@@ -207,7 +215,10 @@ def open_mrf_text(path: str):
     encoding = _sniff_file(path)
     if encoding != "utf-8-sig":
         log.info("%s: reading as %s", os.path.basename(path), encoding)
-    return open(path, "r", encoding=encoding, newline="", errors="replace")
+    # A .gz is decompressed on the fly, so a gzipped 4 GB export never lands
+    # on disk uncompressed.
+    opener = gzip.open if path.lower().endswith(".gz") else open
+    return opener(path, "rt", encoding=encoding, newline="", errors="replace")
 
 
 class _ZipCsvStream:
@@ -455,7 +466,7 @@ def _xlsx_row_source(path: str):
 
 
 def _row_source(path: str):
-    if path.lower().endswith((".xlsx", ".xlsm")):
+    if _without_gz(path).lower().endswith((".xlsx", ".xlsm")):
         return _xlsx_row_source(path)
     return _csv_row_source(path)
 
@@ -681,7 +692,8 @@ def _open_binary(path: str):
             raw.close()
             zf.close()
     else:
-        fh = open(path, "rb")
+        opener = gzip.open if path.lower().endswith(".gz") else open
+        fh = opener(path, "rb")
         try:
             yield _BomStrippedBinary(fh)
         finally:
@@ -841,7 +853,7 @@ def read_mrf_json(path: str, limit: int | None = None) -> tuple[MrfMetadata, Ite
 
 
 def _is_json_source(path: str) -> bool:
-    lower = path.lower()
+    lower = _without_gz(path).lower()
     if lower.endswith(".json"):
         return True
     if lower.endswith(".zip"):

@@ -128,6 +128,8 @@ The parser handles every physical layout CMS files arrive in, auto-detected:
 - **XLSX** — the same tall/wide layouts shipped as a spreadsheet, read row by
   row with `openpyxl` in read-only mode. A spreadsheet is just another way of
   producing the same rows, so it shares the CSV layout logic exactly.
+- **GZIP** — a `.csv.gz` or `.json.gz` is decompressed on the fly, so a large
+  system's multi-gigabyte export never lands on disk uncompressed.
 
 Real-world files also vary in *where the data starts*. The CMS template puts two
 metadata rows (hospital name, NPI, license, version) above the data header, but
@@ -149,6 +151,12 @@ for CSV files, its **organizational NPI** (from the metadata); these are the
 join keys back to the POS hospitals (see [linking](#linking-charges-to-pos-hospitals)).
 JSON files often omit the NPI, so they link by name + state or an EIN-based
 crosswalk.
+
+A file whose extension the ingester does not recognize is **named in the log**
+before the run starts and counted again at the end, rather than passed over in
+silence. A half-finished `.crdownload` sitting in a download folder looks
+exactly like a hospital that was never ingested, and silence is how one gets
+missed.
 
 Re-ingesting the same file replaces its prior load (idempotent).
 
@@ -270,7 +278,7 @@ hospitals ingest [options]
   --echo-sql               Echo SQL statements (debugging)
 
 hospitals ingest-charges PATH [options]
-  PATH                     An MRF .csv/.zip/.json/.xlsx, or a directory of them
+  PATH                     An MRF .csv/.zip/.json/.xlsx/.gz, or a directory of them
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Cap on items (data rows) read per file
   --skip-existing          Skip files already loaded (resumable batches)
@@ -410,6 +418,7 @@ tests/
   test_price_transparency_json.py JSON MRF parsing + end-to-end
   test_price_transparency_xlsx.py XLSX parsing, CSV parity, mixed-folder ingest
   test_price_transparency_header.py header-block location, missing preamble
+  test_price_transparency_gzip.py  gzipped MRFs, and reporting skipped files
   test_price_transparency_encoding.py cp1252 CSVs and BOM-prefixed JSON
   test_ingest_charges.py         charge ingestion end-to-end into SQLite
   test_link.py                   crosswalk load + NPI/name linking

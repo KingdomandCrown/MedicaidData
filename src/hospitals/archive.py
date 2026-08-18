@@ -22,13 +22,13 @@ from dataclasses import dataclass, field
 
 from . import price_transparency as pt
 from .db import loaded_source_files, make_engine
+# Whatever the ingester recognizes; anything else in the folder is left alone
+# rather than guessed about. Imported rather than repeated so the two lists
+# cannot drift apart and strand a file type the ingester can actually read.
+from .ingest_charges import SUPPORTED
 from .logging_config import get_logger
 
 log = get_logger(__name__)
-
-# The extensions the ingester recognizes; anything else in the folder is left
-# alone rather than guessed about.
-SUPPORTED = (".csv", ".zip", ".json", ".xlsx", ".xlsm")
 
 
 @dataclass
