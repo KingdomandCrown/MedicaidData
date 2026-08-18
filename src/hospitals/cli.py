@@ -35,6 +35,7 @@ from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
 from .repair import backfill_npis, repair_eins
+from .scan import human_bytes, scan_for_ingested, write_listing
 
 log = get_logger(__name__)
 
@@ -224,6 +225,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--recursive",
         action="store_true",
         help="Descend into subdirectories, mirroring their layout at the destination.",
+    )
+
+    scan = sub.add_parser(
+        "scan-ingested",
+        help="Find MRF files anywhere on disk that the database already holds.",
+    )
+    scan.add_argument(
+        "paths",
+        nargs="*",
+        default=["~/Desktop", "~/Downloads", "~/Documents"],
+        help="Folders to walk (default: ~/Desktop ~/Downloads ~/Documents).",
+    )
+    scan.add_argument("--database-url", default=DEFAULT_DB_URL)
+    scan.add_argument(
+        "--output",
+        default=None,
+        help="Write the already-ingested paths to this file, one per line.",
+    )
+    scan.add_argument(
+        "--limit", type=int, default=20, help="Folders to list (default: 20)."
     )
 
     gap = sub.add_parser(
@@ -555,6 +576,59 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_scan_ingested(args: argparse.Namespace) -> int:
+    summary = scan_for_ingested(args.paths, database_url=args.database_url)
+
+    if summary.missing_roots:
+        print(f"\nSkipped (not a directory): {', '.join(summary.missing_roots)}")
+    if not summary.roots:
+        print("\nNothing to scan.", file=sys.stderr)
+        return 2
+
+    print(
+        f"\n{len(summary.ingested)} file(s) already in the database, holding "
+        f"{human_bytes(summary.reclaimable_bytes)}."
+    )
+    print(
+        f"{len(summary.not_ingested)} file(s) not loaded, holding "
+        f"{human_bytes(summary.kept_bytes)} — these are still work to do."
+    )
+
+    folders = sorted(
+        summary.by_directory.items(), key=lambda kv: -kv[1][1]
+    )
+    if folders:
+        print(f"\nWhere the reclaimable space is (top {min(args.limit, len(folders))}):")
+        for directory, (count, size) in folders[: args.limit]:
+            print(f"  {human_bytes(size):>12}  {count:>5} file(s)  {directory}")
+        if len(folders) > args.limit:
+            print(f"  ... and {len(folders) - args.limit} more folder(s)")
+
+    dupes = summary.duplicate_names
+    if dupes:
+        print(
+            f"\n{len(dupes)} file name(s) appear in more than one folder. The "
+            "database stores each once, so every copy reads as ingested — "
+            "deleting all of them leaves none:"
+        )
+        for key, paths in list(dupes.items())[:10]:
+            print(f"  {key}")
+            for path in paths:
+                print(f"      {path}")
+        if len(dupes) > 10:
+            print(f"  ... and {len(dupes) - 10} more")
+
+    if args.output:
+        written = write_listing(summary, args.output)
+        print(f"\nWrote {written} path(s) to {args.output} — review before deleting.")
+
+    print(
+        "\nNothing was moved or deleted. To act on one folder:\n"
+        "  hospitals archive-ingested <folder> --to <somewhere> --recursive --apply"
+    )
+    return 0
+
+
 def _cmd_gap_report(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     report = build_gap_report(engine, min_system_size=args.min_system_size)
@@ -669,6 +743,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_backfill_npis(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
+    if args.command == "scan-ingested":
+        return _cmd_scan_ingested(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
     if args.command == "fetch-crosswalk":

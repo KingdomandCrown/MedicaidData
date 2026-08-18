@@ -445,6 +445,12 @@ hospitals repair-eins [options]
   --sources-only           Fix charge_sources only; leave the charge rows for later
   --limit N                Sources to list (default: 40)
 
+hospitals scan-ingested [PATH ...] [options]
+  PATH ...                 Folders to walk (default: ~/Desktop ~/Downloads ~/Documents)
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --output PATH            Write the already-ingested paths, one per line
+  --limit N                Folders to list (default: 20)
+
 hospitals archive-ingested PATH --to DEST [options]
   PATH                     Folder of MRF files to tidy
   --to DEST                Folder to move loaded files into (created if missing)
