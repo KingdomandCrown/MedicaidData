@@ -132,7 +132,7 @@ def ingest_state(
             try:
                 dist = cms_pos.discover_latest_distribution()
                 edition = f"{dist.title} ({dist.modified})"
-                raw = cms_pos.iter_data_api_records(
+                raw = cms_pos.iter_distribution_records(
                     dist,
                     state_usps=target,
                     hospitals_only=True,

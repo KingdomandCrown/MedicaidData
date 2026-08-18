@@ -330,6 +330,14 @@ def discover_latest_distribution(
 
         candidates.sort(key=lambda d: (d.modified or ""), reverse=True)
         latest = candidates[0]
+        if latest.title != dataset_title:
+            # A loose match found something; say which something. Silently
+            # loading a dataset nobody asked for is worse than not finding one.
+            log.warning(
+                "Matched %r for requested %r — verify this is the file you want",
+                latest.title,
+                dataset_title,
+            )
         log.info(
             "Latest POS distribution: %s (modified=%s, %s)",
             latest.title,

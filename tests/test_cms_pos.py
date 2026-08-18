@@ -382,3 +382,85 @@ def test_near_miss_titles_read_both_catalog_shapes():
     assert cms_pos._near_miss_titles(dcat) == ["Provider of Services File Extract"]
     assert cms_pos._near_miss_titles(dkan) == ["Provider of Services File Extract"]
     assert cms_pos._near_miss_titles("nonsense") == []
+
+
+def test_a_loosely_matched_title_is_flagged(caplog):
+    """CMS renamed the POS file; loading a different dataset must not be quiet."""
+
+    import json
+    import logging
+
+    from hospitals import cms_pos
+
+    payload = {"dataset": [{
+        "title": "Provider of Services File - Internet Quality Improvement and Evaluation System",
+        "identifier": "iqies",
+        "modified": "2026-08-14",
+        "distribution": [{
+            "downloadURL": "https://data.cms.gov/x/POS_File_iQIES_Q4_2025.csv",
+            "mediaType": "text/csv",
+        }],
+    }]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    with caplog.at_level(logging.WARNING):
+        latest = cms_pos.discover_latest_distribution(
+            session=session, catalogs=((url, None, "dcat"),)
+        )
+
+    assert "iQIES" in latest.download_url
+    assert any("verify this is the file you want" in r.getMessage() for r in caplog.records)
+
+
+def test_an_exact_match_says_nothing(caplog):
+    import json
+    import logging
+
+    from hospitals import cms_pos
+
+    payload = {"dataset": [{
+        "title": cms_pos.POS_DATASET_TITLE,
+        "identifier": "x",
+        "modified": "2026-08-14",
+        "distribution": [{"downloadURL": "https://x/pos.csv", "mediaType": "text/csv"}],
+    }]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    with caplog.at_level(logging.WARNING):
+        cms_pos.discover_latest_distribution(session=session, catalogs=((url, None, "dcat"),))
+
+    assert not [r for r in caplog.records if "verify" in str(r.msg)]
+
+
+def test_a_csv_only_distribution_is_read_by_downloading_it(monkeypatch):
+    """The bug this fixes: ingest demanded a data-api id a DCAT entry has none of."""
+
+    from hospitals import cms_pos
+
+    dist = cms_pos.PosDistribution(
+        dataset_id="d", distribution_id=None, title="POS",
+        modified="2026-08-14", download_url="https://x/pos.csv",
+    )
+    monkeypatch.setattr(
+        cms_pos, "download_csv", lambda d, session=None: iter([{"STATE_CD": "KS"}])
+    )
+
+    assert list(cms_pos.iter_distribution_records(dist)) == [{"STATE_CD": "KS"}]
+
+
+def test_a_distribution_with_an_id_still_uses_the_data_api(monkeypatch):
+    from hospitals import cms_pos
+
+    dist = cms_pos.PosDistribution(
+        dataset_id="d", distribution_id="uuid", title="POS",
+        modified="2026-08-14", download_url=None,
+    )
+    monkeypatch.setattr(
+        cms_pos,
+        "iter_data_api_records",
+        lambda d, **kw: iter([{"STATE_CD": "MD"}]),
+    )
+
+    assert list(cms_pos.iter_distribution_records(dist)) == [{"STATE_CD": "MD"}]
