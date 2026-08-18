@@ -65,8 +65,24 @@ class CmsUnavailableError(RuntimeError):
 
 
 def _session(session: requests.Session | None = None) -> requests.Session:
+    """A session that identifies itself and asks for JSON.
+
+    ``setdefault`` was the obvious way to write this and did nothing: a fresh
+    ``requests.Session`` already carries ``Accept: */*`` and its own
+    ``User-Agent``, so the key was never absent and ours was never sent. CMS
+    duly answered the metastore path with the portal's single-page app — a 200
+    carrying HTML — because a client asking for anything gets the thing meant
+    for browsers.
+
+    Replace requests' defaults, but leave alone any header a caller set
+    deliberately.
+    """
+
     sess = session or requests.Session()
-    sess.headers.setdefault("User-Agent", USER_AGENT)
+    stock = requests.utils.default_headers()
+    for name, value in (("User-Agent", USER_AGENT), ("Accept", "application/json")):
+        if sess.headers.get(name) in (None, stock.get(name)):
+            sess.headers[name] = value
     return sess
 
 

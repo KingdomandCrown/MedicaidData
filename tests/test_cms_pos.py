@@ -127,3 +127,23 @@ def test_an_http_error_still_reports_its_status():
     session = _FakeSession(_FakeResponse(503, "upstream down", "text/plain"))
     with pytest.raises(cms_pos.CmsUnavailableError, match="HTTP 503"):
         cms_pos._get_json("https://data.cms.gov/x", None, session)
+
+
+def test_the_session_asks_for_json():
+    """data.cms.gov served its own SPA to a client that did not say what it wanted."""
+
+    from hospitals import cms_pos
+
+    sess = cms_pos._session()
+    assert sess.headers["Accept"] == "application/json"
+    assert "hospitals-kb" in sess.headers["User-Agent"]
+
+
+def test_a_caller_supplied_accept_header_is_respected():
+    import requests
+
+    from hospitals import cms_pos
+
+    custom = requests.Session()
+    custom.headers["Accept"] = "application/vnd.api+json"
+    assert cms_pos._session(custom).headers["Accept"] == "application/vnd.api+json"
