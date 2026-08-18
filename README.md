@@ -166,6 +166,16 @@ missed.
 
 Re-ingesting the same file replaces its prior load (idempotent).
 
+A SQLite database is opened in **WAL mode** with a 30-second busy timeout, so
+`stats`, `gap-report`, and `archive-ingested` all work *while* a long ingest is
+running. Without it one writer blocks every reader and a routine check fails
+with "database is locked". `synchronous=NORMAL` goes with WAL: a crash can cost
+the most recent commits but cannot corrupt the file, which is the right trade
+for a store rebuilt from files on disk.
+
+Only one ingest may write at a time. Starting a second one against the same
+database will fail — that is SQLite, not a bug.
+
 ### Linking charges to POS hospitals
 
 Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by

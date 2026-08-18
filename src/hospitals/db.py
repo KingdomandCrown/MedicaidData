@@ -29,6 +29,7 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    event,
     func,
     insert,
     select,
@@ -200,12 +201,51 @@ class LoadResult:
     edition: str | None
 
 
+# How long a statement waits for a lock before giving up. A long batch holds
+# the write lock in bursts, and a read that arrives mid-burst should wait a
+# moment rather than fail.
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
+
 def make_engine(database_url: str, echo: bool = False) -> Engine:
     """Create an engine, ensuring a SQLite file's parent directory exists."""
 
     _ensure_sqlite_dir(database_url)
     log.info("Connecting to database: %s", _redact(database_url))
-    return create_engine(database_url, echo=echo, future=True)
+    engine = create_engine(database_url, echo=echo, future=True)
+    if database_url.startswith("sqlite"):
+        _configure_sqlite(engine)
+    return engine
+
+
+def _configure_sqlite(engine: Engine) -> None:
+    """Make a file-backed SQLite database usable while a long batch runs.
+
+    Out of the box, one writer blocks *everything*, so checking coverage or
+    tidying a folder during a multi-hour ingest fails outright with "database
+    is locked". Three pragmas fix that:
+
+    * **WAL** lets readers work while a writer is active, which is the whole
+      point — reading is safe during a load, and refusing it is not.
+    * **busy_timeout** makes a statement wait for a contended lock instead of
+      failing on the first attempt.
+    * **synchronous=NORMAL** is the standard companion to WAL: a crash or
+      power loss can cost the most recent commits but cannot corrupt the file,
+      and it is markedly faster for bulk loads. A knowledge base rebuilt from
+      files on disk can afford that trade; a ledger could not.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - driver hook
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+            # Fails harmlessly on :memory: and on a database another process
+            # holds exclusively; the busy_timeout above still applies.
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:
