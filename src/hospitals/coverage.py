@@ -39,10 +39,25 @@ class SourceRow:
     ccn: str | None
     link_method: str | None
     charge_count: int
+    shares_with: str | None = None  # a linked sibling holding the same dataset
+    shares_ccn: str | None = None
 
     @property
     def is_linked(self) -> bool:
         return bool(self.ccn)
+
+    @property
+    def is_accounted_for(self) -> bool:
+        """Linked, or a copy of a dataset that is.
+
+        A freestanding emergency department has no CCN of its own — it runs
+        under a parent hospital\'s license and publishes the parent\'s
+        chargemaster, which is why HCA HealthOne\'s South Parker ER carries
+        Sky Ridge\'s row count to the digit. Reporting that as an unlinked gap
+        makes correct behaviour look broken and hides the real gaps among it.
+        """
+
+        return self.is_linked or bool(self.shares_with)
 
 
 @dataclass
@@ -71,6 +86,22 @@ class CoverageReport:
     @property
     def unlinked_sources(self) -> list[SourceRow]:
         return [s for s in self.sources if not s.is_linked]
+
+    @property
+    def shared_sources(self) -> list[SourceRow]:
+        """Unlinked, but holding a dataset a linked sibling already carries."""
+
+        return [s for s in self.sources if not s.is_linked and s.shares_with]
+
+    @property
+    def missing_sources(self) -> list[SourceRow]:
+        """Unlinked and unaccounted for — the real gaps."""
+
+        return [s for s in self.sources if not s.is_accounted_for]
+
+    @property
+    def missing_rows(self) -> int:
+        return sum(s.charge_count or 0 for s in self.missing_sources)
 
     @property
     def covered_hospitals(self) -> list[HospitalRow]:
@@ -103,6 +134,11 @@ class CoverageReport:
             return (
                 f"{len(self.sources)} charge file(s) are held, none linked to a CCN — "
                 "the files exist but nothing can find them"
+            )
+        if self.missing_sources and not self.uncovered_hospitals:
+            return (
+                f"every matching hospital has a file; {len(self.missing_sources)} "
+                "further file(s) match no hospital in the POS universe"
             )
         if self.uncovered_hospitals:
             return (
@@ -216,6 +252,7 @@ def coverage_for(
                 )
             )
 
+    _mark_shared_datasets(engine, report)
     report.sources.sort(key=lambda s: -s.charge_count)
     report.hospitals.sort(key=lambda h: (h.is_covered, h.name))
     del report.sources[limit:]
@@ -230,3 +267,43 @@ def coverage_for(
         len(report.covered_hospitals),
     )
     return report
+
+
+def _mark_shared_datasets(engine: Engine, report: CoverageReport) -> None:
+    """Note, for each unlinked file, a linked sibling holding the same dataset.
+
+    Same EIN and the same row count to the digit is the signature: HCA
+    HealthOne's South Parker ER and Sky Ridge both hold 3,026,183 rows because
+    the ER runs under Sky Ridge's licence and publishes its chargemaster.
+    """
+
+    wanted = {
+        (s.ein, s.charge_count)
+        for s in report.sources
+        if not s.is_linked and s.ein and s.charge_count
+    }
+    if not wanted:
+        return
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                charge_sources.c.ein,
+                charge_sources.c.charge_count,
+                charge_sources.c.source_file,
+                charge_sources.c.ccn,
+            ).where(charge_sources.c.ccn.is_not(None))
+        ).mappings().all()
+
+    siblings: dict[tuple[str, int], tuple[str, str]] = {}
+    for row in rows:
+        key = (row["ein"], row["charge_count"])
+        if key in wanted and key not in siblings:
+            siblings[key] = (row["source_file"], row["ccn"])
+
+    for source in report.sources:
+        if source.is_linked:
+            continue
+        match = siblings.get((source.ein, source.charge_count))
+        if match:
+            source.shares_with, source.shares_ccn = match

@@ -601,14 +601,26 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
             f"{report.charge_rows:,} rows."
         )
         for src in report.sources[: args.limit]:
-            where = f"CCN {src.ccn} via {src.link_method}" if src.is_linked else "UNLINKED"
+            if src.is_linked:
+                where = f"CCN {src.ccn} via {src.link_method}"
+            elif src.shares_with:
+                where = f"same data as CCN {src.shares_ccn}"
+            else:
+                where = "UNLINKED"
             print(f"  {src.charge_count:>12,} rows  {where:<28}  {src.source_file}")
         if len(report.sources) > args.limit:
             print(f"  ... and {len(report.sources) - args.limit} more")
-        if report.unlinked_rows:
+        if report.shared_sources:
             print(
-                f"\n  {report.unlinked_rows:,} row(s) sit in files with no CCN. "
-                "Run fetch-crosswalk, backfill-npis, then link-charges."
+                f"\n  {len(report.shared_sources)} file(s) hold a dataset a linked "
+                "sibling already carries — a freestanding ED or provider-based "
+                "department has no CCN of its own and publishes its parent's "
+                "chargemaster. Not a gap."
+            )
+        if report.missing_rows:
+            print(
+                f"\n  {report.missing_rows:,} row(s) sit in files with no CCN and no "
+                "linked sibling. Run fetch-crosswalk, backfill-npis, then link-charges."
             )
 
     if report.hospitals:

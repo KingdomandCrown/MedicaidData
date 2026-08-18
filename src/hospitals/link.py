@@ -40,11 +40,19 @@ _STATE_IN_ADDRESS = re.compile(r",\s*([A-Za-z]{2})\s+\d{5}")
 
 
 def normalize_name(name: str | None) -> str:
-    """Normalize a hospital name for heuristic matching."""
+    """Normalize a hospital name for heuristic matching.
+
+    An apostrophe is *removed* rather than turned into a space. POS writes
+    "HCA HEALTHONE PRESBYTERIAN ST LUKE\'S"; the filename writes "ST-LUKES".
+    Replacing the apostrophe with a space makes those "LUKE S" and "LUKES" —
+    different names, and 3.1 million charge rows unmatched over one character.
+    Every other punctuation mark genuinely separates words, so it still does.
+    """
 
     if not name:
         return ""
-    text = re.sub(r"[^A-Z0-9 ]", " ", name.upper())
+    text = re.sub(r"[\u2019\u02bc\']", "", name.upper())
+    text = re.sub(r"[^A-Z0-9 ]", " ", text)
     tokens = [t for t in text.split() if t and t not in _NAME_NOISE]
     return " ".join(tokens)
 

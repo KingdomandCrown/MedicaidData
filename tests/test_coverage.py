@@ -219,3 +219,90 @@ def test_the_limit_applies_after_sorting(engine):
 
     sources = coverage_for(engine, "hca", limit=2).sources
     assert [s.charge_count for s in sources] == [400, 300]
+
+
+# --- a file with no CCN of its own ----------------------------------------
+
+
+def test_a_freestanding_ed_is_not_reported_as_a_gap(engine):
+    """South Parker ER holds 3,026,183 rows — Sky Ridge's count, to the digit.
+
+    It runs under Sky Ridge's licence, has no CCN, and publishes its parent's
+    chargemaster. Calling that an unlinked gap makes correct behaviour look
+    broken and buries the real gaps among it.
+    """
+
+    _hospital(engine, "060112", "HCA HEALTHONE SKY RIDGE", state="CO")
+    _source(
+        engine,
+        "84-1321373_HCA-HEALTHONE-SKY-RIDGE_standardcharges.json",
+        name="HEALTHONE",
+        ccn="060112",
+        method="name_state",
+        count=3_026_183,
+    )
+    _source(
+        engine,
+        "84-1321373_HCA-HEALTHONE-SOUTH-PARKER-ER_standardcharges.json",
+        name="HEALTHONE",
+        count=3_026_183,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            charge_sources.update().values(ein="841321373")
+        )
+
+    report = coverage_for(engine, "healthone")
+    shared = report.shared_sources
+
+    assert len(shared) == 1
+    assert shared[0].source_file.endswith("SOUTH-PARKER-ER_standardcharges.json")
+    assert shared[0].shares_ccn == "060112"
+    assert shared[0].is_accounted_for is True
+    assert report.missing_sources == []
+    assert report.missing_rows == 0
+
+
+def test_a_different_row_count_under_one_ein_is_still_a_gap(engine):
+    """Presbyterian St Luke's has its own data — 3,119,832 rows, unique."""
+
+    _hospital(engine, "060112", "HCA HEALTHONE SKY RIDGE", state="CO")
+    _source(
+        engine,
+        "84-1321373_HCA-HEALTHONE-SKY-RIDGE_standardcharges.json",
+        ccn="060112",
+        method="name_state",
+        count=3_026_183,
+    )
+    _source(
+        engine,
+        "84-1321373_HCA-HEALTHONE-PRESBYTERIAN-ST-LUKES_standardcharges.json",
+        count=3_119_832,
+    )
+    with engine.begin() as conn:
+        conn.execute(charge_sources.update().values(ein="841321373"))
+
+    report = coverage_for(engine, "healthone")
+    assert len(report.missing_sources) == 1
+    assert report.missing_rows == 3_119_832
+    assert report.shared_sources == []
+
+
+def test_a_shared_count_under_a_different_ein_is_not_a_sibling(engine):
+    _hospital(engine, "060112", "ALPHA HOSPITAL", state="CO")
+    _source(engine, "111111111_alpha.json", ccn="060112", method="name_state", count=500)
+    _source(engine, "222222222_beta.json", count=500)
+    with engine.begin() as conn:
+        conn.execute(
+            charge_sources.update()
+            .where(charge_sources.c.source_file == "111111111_alpha.json")
+            .values(ein="111111111")
+        )
+        conn.execute(
+            charge_sources.update()
+            .where(charge_sources.c.source_file == "222222222_beta.json")
+            .values(ein="222222222")
+        )
+
+    report = coverage_for(engine, "alpha")
+    assert report.shared_sources == []

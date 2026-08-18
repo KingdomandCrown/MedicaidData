@@ -135,3 +135,27 @@ def test_load_crosswalk_rejects_bad_columns(tmp_path):
     bad.write_text("foo,bar\n1,2\n")
     with pytest.raises(ValueError):
         load_crosswalk(engine, str(bad))
+
+
+def test_an_apostrophe_does_not_break_a_name_in_two():
+    """POS writes "ST LUKE'S"; the filename writes "ST-LUKES".
+
+    Turning the apostrophe into a space made those "LUKE S" and "LUKES" —
+    different names, and 3.1 million charge rows unmatched over one character.
+    """
+
+    from hospitals.link import normalize_name
+
+    assert normalize_name("HCA HEALTHONE PRESBYTERIAN ST LUKE'S") == normalize_name(
+        "HCA-HEALTHONE-PRESBYTERIAN-ST-LUKES"
+    )
+    assert normalize_name("CHILDREN'S MERCY") == normalize_name("CHILDRENS MERCY")
+    # A typographic apostrophe is the same character to a reader.
+    assert normalize_name("ST MARY’S") == normalize_name("ST MARYS")
+
+
+def test_other_punctuation_still_separates_words():
+    from hospitals.link import normalize_name
+
+    assert normalize_name("ST. LUKE'S-ROOSEVELT") == "ST LUKES ROOSEVELT"
+    assert normalize_name("MERCY/ST VINCENT") == "MERCY ST VINCENT"
