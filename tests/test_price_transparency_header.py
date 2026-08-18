@@ -105,3 +105,54 @@ def test_an_empty_file_raises(tmp_path):
     empty.write_text("")
     with pytest.raises(ValueError, match="ended before the data header"):
         pt.read_any(str(empty))
+
+
+# --- a metadata header that shares a column name with the data header -------
+
+SETTING_META = os.path.join(FIX, "mrf_metadata_setting_sample.csv")
+
+
+def test_a_metadata_row_naming_setting_is_not_the_data_header():
+    """Six Connecticut hospitals loaded zero rows because of this row.
+
+    Hartford HealthCare's metadata header carries a column called ``setting``
+    (value "BOTH"). Treating that word as proof of a data header made line 1
+    win, so the real header two rows down was never reached and every column
+    lookup missed.
+    """
+
+    meta, rows = pt.read_any(SETTING_META)
+    rows = list(rows)
+
+    assert meta.hospital_name == "HARTFORD GENERAL HOSPITAL"
+    assert meta.version == "3.0.0"
+    assert meta.primary_npi == "1902834880"
+    assert meta.license_state == "CT"
+    assert meta.layout == "tall"
+    assert len(rows) == 3
+    assert rows[0].description == "HEART TRANSPLANT OR IMPLANT OF HEART ASSIST SYSTEM"
+    assert rows[0].code == "1"
+    assert rows[0].code_type == "MS-DRG"
+    assert rows[0].payer_name == "Aetna"
+    assert str(rows[0].negotiated_dollar) == "318750.00"
+
+
+def test_metadata_column_names_disqualify_a_row():
+    # Whatever else it carries, a row naming the hospital is not the data row.
+    assert not pt._looks_like_data_header(["hospital_name", "version", "setting"])
+    assert not pt._looks_like_data_header(["last_updated_on", "description"])
+    assert not pt._looks_like_data_header(["license_number|CT", "billing_class", "setting"])
+
+
+def test_one_suggestive_column_is_not_enough_but_two_are():
+    # "setting" alone appears in metadata headers in the wild.
+    assert not pt._looks_like_data_header(["foo", "setting", "bar"])
+    assert pt._looks_like_data_header(["setting", "billing_class"])
+    assert pt._looks_like_data_header(["setting", "modifiers"])
+
+
+def test_decisive_columns_still_stand_alone():
+    assert pt._looks_like_data_header(["description"])
+    assert pt._looks_like_data_header(["code|1", "code|1|type"])
+    assert pt._looks_like_data_header(["payer_name", "plan_name"])
+    assert pt._looks_like_data_header(["x", "standard_charge|AETNA|PPO|negotiated_dollar"])

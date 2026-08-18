@@ -298,14 +298,38 @@ def parse_metadata(meta_header: Sequence[str], meta_values: Sequence[str]) -> Mr
     )
 
 
-# Columns that only ever appear in a *data* header, never in the metadata
-# preamble. Used to find the header row instead of assuming it is line 3.
-_DATA_HEADER_SIGNALS = {
+# Finding the data header is a matter of evidence, not a single keyword.
+#
+# The comment that used to sit here claimed these columns "only ever appear in
+# a data header". That was wrong, and the cost was six Connecticut hospitals
+# loading zero rows: their *metadata* header carries a column named ``setting``
+# (value "BOTH"), so the metadata row was accepted as the data header and the
+# real one, two rows further down, was never reached.
+#
+# So: a column that could only belong to the data is decisive on its own; a
+# column that merely tends to belong there needs corroboration; and a column
+# that identifies the metadata row disqualifies the row outright.
+_STRONG_DATA_COLUMNS = {
     "description",
     "code|1",
     "payer_name",
-    "billing_class",
+    "plan_name",
+}
+_WEAK_DATA_COLUMNS = {
     "setting",
+    "billing_class",
+    "modifiers",
+    "drug_unit_of_measurement",
+    "drug_type_of_measurement",
+}
+_METADATA_COLUMNS = {
+    "hospital_name",
+    "last_updated_on",
+    "version",
+    "location_name",
+    "hospital_location",
+    "hospital_address",
+    "type_2_npi",
 }
 
 # How far to look for the data header before giving up. Real preambles are two
@@ -314,10 +338,24 @@ _MAX_PREAMBLE_ROWS = 8
 
 
 def _looks_like_data_header(row: Sequence[str]) -> bool:
+    """Decide whether a row names the data columns rather than the metadata."""
+
     lowered = {c.strip().lower() for c in row}
-    if lowered & _DATA_HEADER_SIGNALS:
+
+    # Metadata markers settle it: a row naming the hospital cannot be the row
+    # naming the charges, whatever else it happens to contain.
+    if lowered & _METADATA_COLUMNS:
+        return False
+    if any(c.startswith("license_number") for c in lowered):
+        return False
+
+    if lowered & _STRONG_DATA_COLUMNS:
         return True
-    return any(c.startswith("standard_charge|") for c in lowered)
+    if any(c.startswith("standard_charge|") for c in lowered):
+        return True
+    # No decisive column, so require corroboration: one suggestive name could
+    # be a metadata field, two together are a data header.
+    return len(lowered & _WEAK_DATA_COLUMNS) >= 2
 
 
 def _read_header_block(reader, path: str) -> tuple[list[str], list[str], list[str]]:

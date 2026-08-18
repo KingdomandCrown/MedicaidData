@@ -1,0 +1,6 @@
+hospital_name,last_updated_on,version,location_name,hospital_address,license_number|CT,type_2_npi,"To the best of its knowledge and belief, this hospital has included all applicable standard charge information in accordance with the requirements of 45 CFR 180.50, and the information encoded is true, accurate, and complete as of the date in the file.",contact_name,financial_aid_policy,faqs,setting
+HARTFORD GENERAL HOSPITAL,4/1/2026,3.0.0,HARTFORD GENERAL HOSPITAL,"80 SEYMOUR ST, HARTFORD, CT 06102",46,1902834880 | 1770696643,TRUE,A. Boisvert,https://example.org/aid,https://example.org/faq,BOTH
+description,code|1,code|1|type,code|2,code|2|type,modifiers,setting,drug_unit_of_measurement,drug_type_of_measurement,standard_charge|gross,standard_charge|discounted_cash,payer_name,plan_name,standard_charge|negotiated_dollar,standard_charge|methodology
+HEART TRANSPLANT OR IMPLANT OF HEART ASSIST SYSTEM,1,MS-DRG,,,,inpatient,,,425000.00,340000.00,Aetna,Commercial PPO,318750.00,case rate
+HEART TRANSPLANT OR IMPLANT OF HEART ASSIST SYSTEM,1,MS-DRG,,,,inpatient,,,425000.00,340000.00,Anthem,Blue Care,301200.00,case rate
+CT SCAN HEAD W/O CONTRAST,70450,CPT,,,,outpatient,,,1200.00,800.00,Aetna,Commercial PPO,640.50,fee schedule

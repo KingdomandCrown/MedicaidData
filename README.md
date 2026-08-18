@@ -131,6 +131,15 @@ The parser handles every physical layout CMS files arrive in, auto-detected:
 - **GZIP** — a `.csv.gz` or `.json.gz` is decompressed on the fly, so a large
   system's multi-gigabyte export never lands on disk uncompressed.
 
+Finding the data header is a matter of **evidence, not a keyword**. A column
+that could only belong to the charges (`description`, `code|1`, `payer_name`,
+anything starting with `standard_charge|`) settles it; a merely suggestive one
+(`setting`, `billing_class`) needs a second; and a column that names the
+hospital (`hospital_name`, `version`, `license_number|XX`) disqualifies the row
+outright. That last rule matters: Hartford HealthCare's *metadata* header
+carries a column called `setting`, and treating one such word as proof cost six
+hospitals a zero-row load.
+
 Real-world files also vary in *where the data starts*. The CMS template puts two
 metadata rows (hospital name, NPI, license, version) above the data header, but
 some hospitals publish the data header on line 1 with no preamble, and others
@@ -426,6 +435,7 @@ tests/
   fixtures/mrf_tall_sample.xlsx  tall layout as a spreadsheet (synthetic)
   fixtures/mrf_headeronly_sample.csv  data header on line 1, no preamble
   fixtures/mrf_spacer_sample.csv      blank row between preamble and header
+  fixtures/mrf_metadata_setting_sample.csv  metadata header sharing a data column name
   fixtures/mrf_cp1252_sample.csv      Windows-encoded CSV (+ .zip twin)
   fixtures/mrf_bom_sample.json        JSON with a UTF-8 byte order mark
   test_normalize.py              identifier + code normalization
