@@ -85,9 +85,16 @@ class DuplicateGroup:
 
     ein: str | None
     charge_count: int
+    npi: str | None = None
     source_files: list[str] = field(default_factory=list)
     hospital_names: list[str] = field(default_factory=list)
     source_ids: list[int] = field(default_factory=list)
+
+    @property
+    def entity(self) -> str:
+        """How this group is identified, for display."""
+
+        return f"EIN {self.ein}" if self.ein else f"NPI {self.npi}"
 
     @property
     def copies(self) -> int:
@@ -206,6 +213,7 @@ def find_duplicate_loads(engine: Engine, *, min_rows: int = 1) -> DuplicateRepor
             select(
                 charge_sources.c.id,
                 charge_sources.c.ein,
+                charge_sources.c.primary_npi,
                 charge_sources.c.charge_count,
                 charge_sources.c.source_file,
                 charge_sources.c.hospital_name,
@@ -220,15 +228,26 @@ def find_duplicate_loads(engine: Engine, *, min_rows: int = 1) -> DuplicateRepor
             conn.execute(select(func.count()).select_from(charge_sources)).scalar_one()
         )
 
-    buckets: dict[tuple[str | None, int], DuplicateGroup] = {}
+    buckets: dict[tuple[str, int], DuplicateGroup] = {}
     for row in rows:
-        # A null EIN cannot be grouped safely: two unrelated hospitals could
-        # share a row count by chance with nothing else tying them together.
-        if not row["ein"]:
+        # An EIN identifies the organization, but 173 sources have no EIN to
+        # give: their systems publish under the organizational NPI alone. The
+        # NPI identifies the organization just as well, and without it those
+        # files — Atrium's among them, the largest duplicates in the store —
+        # would go unchecked entirely. What cannot be grouped is a file with
+        # neither: two unrelated hospitals could share a row count by chance
+        # with nothing at all tying them together.
+        entity = row["ein"] or row["primary_npi"]
+        if not entity:
             continue
-        key = (row["ein"], row["charge_count"])
+        key = (entity, row["charge_count"])
         group = buckets.setdefault(
-            key, DuplicateGroup(ein=row["ein"], charge_count=row["charge_count"])
+            key,
+            DuplicateGroup(
+                ein=row["ein"],
+                npi=row["primary_npi"],
+                charge_count=row["charge_count"],
+            ),
         )
         group.source_files.append(row["source_file"])
         group.hospital_names.append(row["hospital_name"])

@@ -317,3 +317,74 @@ def test_a_batched_prune_removes_every_copy(engine):
     summary = prune_redownloads(engine, apply=True, batch_size=2)
     assert summary.file_count == 3
     assert _remaining(engine) == {"file0.csv", "file1.csv", "file2.csv"}
+
+
+# --- files that have no EIN to group by -----------------------------------
+
+
+def _npi_source(source_file, npi, count, name=None):
+    return dict(
+        source_file=source_file,
+        ein=None,
+        primary_npi=npi,
+        charge_count=count,
+        hospital_name=name,
+        ingested_at=NOW,
+    )
+
+
+def test_files_with_no_ein_are_grouped_by_npi(engine):
+    """Atrium publishes under its NPI, so repair-eins leaves its EIN null.
+
+    Grouping on the EIN alone would stop checking the largest duplicates in
+    the store the moment their invented EINs were corrected.
+    """
+
+    load(engine, [
+        _npi_source("1669348991_atrium_standardcharges.csv", "1669348991", 8544927, "Atrium"),
+        _npi_source("1669348991_atrium_standardcharges (1).csv", "1669348991", 8544927, "Atrium"),
+    ])
+
+    report = find_duplicate_loads(engine)
+    assert len(report.groups) == 1
+    group = report.groups[0]
+    assert group.ein is None
+    assert group.npi == "1669348991"
+    assert group.entity == "NPI 1669348991"
+    assert group.redownload_files == ["1669348991_atrium_standardcharges (1).csv"]
+
+
+def test_a_group_with_an_ein_still_displays_the_ein(engine):
+    load(engine, [
+        _source("akron.csv", "340714357", 5, "Akron"),
+        _source("akron (1).csv", "340714357", 5, "Akron"),
+    ])
+    assert find_duplicate_loads(engine).groups[0].entity == "EIN 340714357"
+
+
+def test_different_npis_are_not_grouped(engine):
+    load(engine, [
+        _npi_source("a.csv", "1669348991", 500000, "A"),
+        _npi_source("b.csv", "1730055054", 500000, "B"),
+    ])
+    assert find_duplicate_loads(engine).groups == []
+
+
+def test_a_file_with_neither_ein_nor_npi_is_still_never_grouped(engine):
+    load(engine, [
+        _npi_source("x.csv", None, 500000, "X"),
+        _npi_source("y.csv", None, 500000, "Y"),
+    ])
+    assert find_duplicate_loads(engine).groups == []
+
+
+def test_pruning_works_on_an_npi_keyed_group(engine):
+    with engine.begin() as conn:
+        conn.execute(insert(charge_sources), [
+            _npi_source("atrium.csv", "1669348991", 2, "Atrium"),
+            _npi_source("atrium (1).csv", "1669348991", 2, "Atrium"),
+        ])
+
+    summary = prune_redownloads(engine, apply=True)
+    assert summary.files == ["atrium (1).csv"]
+    assert _remaining(engine) == {"atrium.csv"}

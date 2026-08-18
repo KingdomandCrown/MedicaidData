@@ -201,10 +201,30 @@ class LoadResult:
     edition: str | None
 
 
-# How long a statement waits for a lock before giving up. A long batch holds
-# the write lock in bursts, and a read that arrives mid-burst should wait a
-# moment rather than fail.
-_SQLITE_BUSY_TIMEOUT_MS = 30_000
+# How long a statement waits for a lock before giving up. A single MRF can
+# insert nine million rows in one transaction, holding the write lock for
+# minutes, so a second writer arriving mid-file needs to wait longer than the
+# 30 seconds this started at — that was tuned for readers, and a reader is not
+# what gets stuck. Five minutes covers all but the largest files; past that,
+# the honest answer is that another writer is running, and the caller is told
+# so rather than left blocking.
+#
+# Set ``HOSPITALS_SQLITE_BUSY_TIMEOUT_MS`` to override — lower it when you would
+# rather be told immediately that a batch is running than wait for it.
+_SQLITE_BUSY_TIMEOUT_MS = 300_000
+
+
+def _busy_timeout_ms() -> int:
+    raw = os.environ.get("HOSPITALS_SQLITE_BUSY_TIMEOUT_MS")
+    if not raw:
+        return _SQLITE_BUSY_TIMEOUT_MS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        log.warning(
+            "Ignoring HOSPITALS_SQLITE_BUSY_TIMEOUT_MS=%r: not a number", raw
+        )
+        return _SQLITE_BUSY_TIMEOUT_MS
 
 
 def make_engine(database_url: str, echo: bool = False) -> Engine:
@@ -239,7 +259,7 @@ def _configure_sqlite(engine: Engine) -> None:
     def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - driver hook
         cursor = dbapi_connection.cursor()
         try:
-            cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+            cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
             # Fails harmlessly on :memory: and on a database another process
             # holds exclusively; the busy_timeout above still applies.
             cursor.execute("PRAGMA journal_mode=WAL")

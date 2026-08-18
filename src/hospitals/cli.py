@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+from sqlalchemy.exc import OperationalError
+
 from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
@@ -351,7 +353,7 @@ def _cmd_duplicates(args: argparse.Namespace) -> int:
             else "same file downloaded more than once"
         )
         print(
-            f"\n  EIN {group.ein} — {group.copies} copies x {group.charge_count:,} rows "
+            f"\n  {group.entity} — {group.copies} copies x {group.charge_count:,} rows "
             f"({group.redundant_rows:,} redundant; {kind})"
         )
         extras = set(group.redownload_files)
@@ -524,6 +526,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     configure_logging(args.log_level)
 
+    try:
+        return _dispatch(parser, args)
+    except OperationalError as exc:
+        if "database is locked" not in str(exc).lower():
+            raise
+        # A traceback here says nothing the first line does not, and buries it.
+        log.error("Database is locked by another writer")
+        print(
+            "\nERROR: the database is locked by another writer — an ingest is "
+            "almost certainly still running.\n"
+            "Nothing was written; this command is safe to re-run once it "
+            "finishes.\n"
+            "Check with:  ps aux | grep ingest-charges",
+            file=sys.stderr,
+        )
+        return 3
+
+
+def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.command == "ingest":
         return _cmd_ingest(args)
     if args.command == "stats":

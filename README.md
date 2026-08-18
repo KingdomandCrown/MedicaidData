@@ -256,6 +256,27 @@ up the correction. `--sources-only` fixes the one row per file in
 for every charge row of every affected file. Prune first: there is no sense
 rewriting rows that are about to be deleted.
 
+Files repaired this way end up with no EIN at all, because their systems publish
+under the NPI alone. Duplicate detection therefore keys on **EIN or NPI**,
+whichever the file has — grouping on the EIN alone would stop checking Atrium
+and Charlotte-Mecklenburg, the largest duplicates in the store, the moment their
+invented EINs were corrected.
+
+### Running two commands at once
+
+One MRF can insert nine million rows in a single transaction, so a second writer
+arriving mid-file waits up to five minutes for the lock. Reads are unaffected
+(WAL). If the wait expires, the command says so in a line and exits 3, having
+written nothing:
+
+```
+ERROR: the database is locked by another writer — an ingest is almost
+certainly still running.
+```
+
+Set `HOSPITALS_SQLITE_BUSY_TIMEOUT_MS` to wait a different length of time, or a
+small value to be told immediately rather than wait at all.
+
 ### Linking charges to POS hospitals
 
 Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by

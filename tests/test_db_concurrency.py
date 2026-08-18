@@ -57,3 +57,53 @@ def test_a_postgres_url_is_left_alone(tmp_path, monkeypatch):
 
     db.make_engine("postgresql+psycopg://u:p@localhost/none")
     assert len(called) == 1, "PostgreSQL must not get the SQLite pragmas"
+
+
+def test_a_locked_database_reports_one_line_not_a_traceback(tmp_path, capsys, monkeypatch):
+    """A repair run against a database an ingest is writing.
+
+    The first attempt died in sixty lines of SQLAlchemy internals ending in
+    "database is locked" — true, and buried. Nothing had been written, which is
+    the fact worth printing.
+    """
+
+    import sqlite3
+
+    from hospitals import cli
+
+    # Wait a moment for the lock, not the five minutes a real batch deserves.
+    monkeypatch.setenv("HOSPITALS_SQLITE_BUSY_TIMEOUT_MS", "50")
+
+    db = tmp_path / "busy.sqlite"
+    engine = make_engine(f"sqlite:///{db}")
+    init_db(engine)
+    with engine.begin() as conn:
+        # A source whose stored EIN is the NPI with its last digit cut off,
+        # so the repair has something it wants to write.
+        conn.execute(
+            insert(charge_sources),
+            dict(
+                source_file="1669348991_atrium_standardcharges.csv",
+                ein="166934899",
+                charge_count=1,
+                ingested_at=NOW,
+            ),
+        )
+    engine.dispose()
+
+    holder = sqlite3.connect(db)
+    holder.execute("PRAGMA busy_timeout=0")
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        code = cli.main(
+            ["repair-eins", "--database-url", f"sqlite:///{db}", "--apply"]
+        )
+    finally:
+        holder.rollback()
+        holder.close()
+
+    assert code == 3
+    err = capsys.readouterr().err
+    assert "locked by another writer" in err
+    assert "Nothing was written" in err
+    assert "Traceback" not in err
