@@ -434,7 +434,9 @@ def iter_data_api_records(
         if not page:
             break
         for row in page:
-            yield row
+            # Same normalization as the CSV path: whichever surface produced
+            # the rows, downstream sees uppercase column names.
+            yield _upper_keys(row) if isinstance(row, dict) else row
         total += len(page)
         log.debug("Fetched %d POS rows (offset=%d)", total, offset)
         if len(page) < page_size:
@@ -456,12 +458,26 @@ def iter_csv_records(path_or_file) -> Iterator[dict]:
         yield from _iter_csv_stream(fh)
 
 
+def _upper_keys(row: dict) -> dict:
+    """Column names uppercased.
+
+    The POS file has always used uppercase headers (``STATE_CD``); the iQIES
+    export publishes the same columns in lowercase (``state_cd``). Every
+    lookup in this pipeline is by the uppercase name, so a lowercase header
+    means every field reads as missing — 58,001 rows parsed cleanly and
+    matched no hospitals at all. Case is not information here, so it is
+    normalized once at the edge rather than guarded at each of forty lookups.
+    """
+
+    return {(k or "").strip().upper(): v for k, v in row.items()}
+
+
 def _iter_csv_stream(fh) -> Iterator[dict]:
     reader = csv.DictReader(fh)
     count = 0
     for row in reader:
         count += 1
-        yield row
+        yield _upper_keys(row)
     log.info("Read %d rows from CSV", count)
 
 

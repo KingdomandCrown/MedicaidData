@@ -526,3 +526,62 @@ def test_a_named_dataset_title_is_honoured():
         session=session, dataset_title=wanted, catalogs=((url, None, "dcat"),)
     )
     assert latest.title == wanted  # the newer iQIES file did not win
+
+
+# --- lowercase headers ----------------------------------------------------
+
+
+def test_lowercase_headers_are_read_as_the_uppercase_columns(tmp_path):
+    """iQIES publishes 'state_cd'; every lookup here is for 'STATE_CD'.
+
+    58,001 rows parsed cleanly and matched no hospitals because of this.
+    """
+
+    from hospitals import cms_pos
+
+    csv_path = tmp_path / "pos.csv"
+    csv_path.write_text(
+        "prvdr_num,fac_name,state_cd,pgm_trmntn_cd\n"
+        "170001,PRATT REGIONAL MEDICAL CENTER,KS,00\n"
+    )
+
+    rows = list(cms_pos.iter_csv_records(str(csv_path)))
+    assert rows[0]["STATE_CD"] == "KS"
+    assert rows[0]["FAC_NAME"] == "PRATT REGIONAL MEDICAL CENTER"
+    assert rows[0]["PRVDR_NUM"] == "170001"
+
+
+def test_uppercase_headers_are_unchanged(tmp_path):
+    from hospitals import cms_pos
+
+    csv_path = tmp_path / "pos.csv"
+    csv_path.write_text("PRVDR_NUM,STATE_CD\n170001,KS\n")
+
+    rows = list(cms_pos.iter_csv_records(str(csv_path)))
+    assert rows[0]["STATE_CD"] == "KS"
+
+
+def test_headers_with_stray_whitespace_still_resolve(tmp_path):
+    from hospitals import cms_pos
+
+    csv_path = tmp_path / "pos.csv"
+    csv_path.write_text(" prvdr_num , state_cd \n170001,KS\n")
+
+    rows = list(cms_pos.iter_csv_records(str(csv_path)))
+    assert rows[0]["STATE_CD"] == "KS"
+
+
+def test_the_normalizer_finds_a_hospital_in_a_lowercase_file(tmp_path):
+    """End to end: the whole point of the case fix."""
+
+    from hospitals import cms_pos, normalize
+
+    csv_path = tmp_path / "pos.csv"
+    csv_path.write_text(
+        "prvdr_num,fac_name,prvdr_ctgry_cd,state_cd,pgm_trmntn_cd\n"
+        "170001,PRATT REGIONAL MEDICAL CENTER,01,KS,00\n"
+    )
+
+    rows = list(cms_pos.iter_csv_records(str(csv_path)))
+    assert rows[0][normalize.COL_CATEGORY] == normalize.CATEGORY_HOSPITAL
+    assert rows[0][normalize.COL_STATE] == "KS"
