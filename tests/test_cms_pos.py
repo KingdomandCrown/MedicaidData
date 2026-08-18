@@ -464,3 +464,65 @@ def test_a_distribution_with_an_id_still_uses_the_data_api(monkeypatch):
     )
 
     assert list(cms_pos.iter_distribution_records(dist)) == [{"STATE_CD": "MD"}]
+
+
+def test_the_other_datasets_that_matched_are_named(caplog):
+    """CMS publishes several 'Provider of Services' files for different systems.
+
+    Choosing among them silently is how you load post-acute providers and
+    wonder why no hospitals matched.
+    """
+
+    import json
+    import logging
+
+    from hospitals import cms_pos
+
+    def _ds(title, modified):
+        return {
+            "title": title,
+            "identifier": title,
+            "modified": modified,
+            "distribution": [{"downloadURL": f"https://x/{modified}.csv", "mediaType": "text/csv"}],
+        }
+
+    payload = {"dataset": [
+        _ds("Provider of Services File - Hospital & Non-Hospital Facility", "2026-03-01"),
+        _ds("Provider of Services File - Internet Quality Improvement and Evaluation System", "2026-08-14"),
+    ]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    with caplog.at_level(logging.WARNING):
+        cms_pos.discover_latest_distribution(session=session, catalogs=((url, None, "dcat"),))
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "Internet Quality Improvement" in logged
+    assert "Hospital & Non-Hospital Facility" in logged
+
+
+def test_a_named_dataset_title_is_honoured():
+    """Once you know which file you want, ask for it by name."""
+
+    import json
+
+    from hospitals import cms_pos
+
+    def _ds(title, modified):
+        return {
+            "title": title, "identifier": title, "modified": modified,
+            "distribution": [{"downloadURL": f"https://x/{modified}.csv", "mediaType": "text/csv"}],
+        }
+
+    wanted = "Provider of Services File - Hospital & Non-Hospital Facility"
+    payload = {"dataset": [
+        _ds(wanted, "2026-03-01"),
+        _ds("Provider of Services File - Internet Quality Improvement and Evaluation System", "2026-08-14"),
+    ]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    latest = cms_pos.discover_latest_distribution(
+        session=session, dataset_title=wanted, catalogs=((url, None, "dcat"),)
+    )
+    assert latest.title == wanted  # the newer iQIES file did not win

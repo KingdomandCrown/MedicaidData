@@ -88,6 +88,7 @@ def ingest_state(
     active_only: bool = True,
     limit: int | None = None,
     echo_sql: bool = False,
+    dataset_title: str | None = None,
 ) -> IngestSummary:
     """Ingest hospitals for one state from the CMS POS file.
 
@@ -105,6 +106,10 @@ def ingest_state(
         Keep only providers whose termination code marks them active.
     limit:
         Cap on raw records read (useful for smoke tests).
+    dataset_title:
+        Which CMS dataset to look for. CMS publishes several "Provider of
+        Services" files covering different provider systems; name one to
+        choose it rather than letting the loose title match pick.
     """
 
     # "ALL" loads every state in a single pass over the national file, rather
@@ -130,7 +135,9 @@ def ingest_state(
         # For the CMS path, resolve the edition label up front for provenance.
         if not input_file:
             try:
-                dist = cms_pos.discover_latest_distribution()
+                dist = cms_pos.discover_latest_distribution(
+                    dataset_title=dataset_title or cms_pos.POS_DATASET_TITLE
+                )
                 edition = f"{dist.title} ({dist.modified})"
                 raw = cms_pos.iter_distribution_records(
                     dist,

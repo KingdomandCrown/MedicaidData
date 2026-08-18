@@ -87,6 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Echo SQL statements (debugging).",
     )
+    ingest.add_argument(
+        "--dataset-title",
+        default=None,
+        help="CMS dataset to look for. CMS publishes several 'Provider of "
+        "Services' files for different provider systems; name one to choose it.",
+    )
 
     stats = sub.add_parser("stats", help="Show row counts in the database.")
     stats.add_argument("--database-url", default=DEFAULT_DB_URL)
@@ -243,6 +249,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             active_only=not args.include_inactive,
             limit=args.limit,
             echo_sql=args.echo_sql,
+            dataset_title=args.dataset_title,
         )
     except CmsUnavailableError as exc:
         log.error("Ingestion failed — CMS unavailable: %s", exc)
