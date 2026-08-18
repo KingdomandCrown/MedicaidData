@@ -201,15 +201,36 @@ hospitals duplicates --database-url sqlite:///data/round5.sqlite
 ```
 
 Files are grouped by EIN *and* exact row count: two files agreeing to the digit
-across three million rows are the same data, not a coincidence. The report says
-how many rows are redundant and what share of the store they are, and
-distinguishes a re-download (one facility name) from one-dataset-per-facility
-(several names).
+across three million rows are the same data, not a coincidence. The report then
+splits the redundancy into the two habits that cause it, because only one of
+them can be fixed by deleting:
 
-It reports and does not delete. A `charge_sources` row is also the record that a
-facility exists and what it is called, so dropping copies loses names even where
-the charges are redundant. Storing one copy with many facilities pointing at it
-is a schema change, and a deliberate one.
+* **The same file downloaded twice** — `anmed.zip` and `anmed (1).zip`. The
+  copy carries no fact the original does not.
+* **One dataset published per facility** — four Cone Health hospitals shipping
+  identical files. Each copy's `charge_sources` row is the only record that
+  the facility exists and what it is called.
+
+Which one applies is decided by the **filenames**, not the hospital name stored
+in the file: a system that publishes per facility usually stamps its own name
+in every copy, so the internal name reads "one hospital downloaded four times"
+when the filenames plainly name four hospitals.
+
+The re-downloads can then be dropped:
+
+```bash
+hospitals prune-duplicates --database-url sqlite:///data/round5.sqlite
+hospitals prune-duplicates --database-url sqlite:///data/round5.sqlite --apply
+```
+
+Dry run unless `--apply`. The copy without a counter survives, deletion runs in
+small transactions so an interrupt loses only the batch in flight, and re-running
+it is a no-op. Per-facility copies are never touched — storing one copy with many
+facilities pointing at it is a schema change, and a deliberate one.
+
+SQLite frees the pages but does not shrink the file: the space is reused by the
+next load rather than returned to the volume. `VACUUM` would return it, but needs
+as much free disk as the database is large.
 
 ### Linking charges to POS hospitals
 
@@ -340,6 +361,11 @@ hospitals ingest-charges PATH [options]
 hospitals duplicates [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --limit N                Groups to list (default: 25)
+
+hospitals prune-duplicates [options]
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --apply                  Actually delete; without it, only report what would go
+  --limit N                Files to list (default: 40)
 
 hospitals archive-ingested PATH --to DEST [options]
   PATH                     Folder of MRF files to tidy

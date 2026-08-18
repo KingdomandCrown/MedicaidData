@@ -4,15 +4,21 @@ Round 6 surfaced two distinct habits. A download folder holds ``file.csv`` and
 ``file (1).csv``. And a large system publishes one file per EIN, shipping a
 copy named for each facility — HCA Houston Southeast and HCA Houston
 Rehabilitation Southeast both loaded 9,582,017 rows, to the digit.
+
+Telling them apart matters because only the first is safe to delete.
 """
 
 import datetime as dt
 
 import pytest
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
-from hospitals.db import charge_sources, init_db, make_engine
-from hospitals.duplicates import find_duplicate_loads
+from hospitals.db import charge_sources, init_db, make_engine, standard_charges
+from hospitals.duplicates import (
+    canonical_name,
+    find_duplicate_loads,
+    prune_redownloads,
+)
 
 NOW = dt.datetime(2026, 8, 18)
 
@@ -39,6 +45,9 @@ def load(engine, rows):
         conn.execute(insert(charge_sources), rows)
 
 
+# --- grouping -------------------------------------------------------------
+
+
 def test_a_re_download_is_caught(engine):
     load(engine, [
         _source("akron_standardcharges.csv", "340714357", 2830769, "Akron"),
@@ -51,6 +60,7 @@ def test_a_re_download_is_caught(engine):
     assert group.copies == 2
     assert group.redundant_rows == 2830769
     assert group.looks_like_one_file_per_facility is False
+    assert group.redownload_files == ["akron_standardcharges (1).csv"]
 
 
 def test_one_dataset_named_per_facility_is_caught_and_distinguished(engine):
@@ -63,7 +73,8 @@ def test_one_dataset_named_per_facility_is_caught_and_distinguished(engine):
     assert group.redundant_rows == 9582017
     # Two different facility names on one dataset — not a re-download.
     assert group.looks_like_one_file_per_facility is True
-    assert group.distinct_names == 2
+    assert group.per_facility_datasets == 2
+    assert group.redownload_files == []
 
 
 def test_different_row_counts_under_one_ein_are_not_duplicates(engine):
@@ -130,3 +141,179 @@ def test_an_empty_database_reports_nothing(engine):
     report = find_duplicate_loads(engine)
     assert report.groups == []
     assert report.share_of_rows == 0.0
+
+
+# --- telling the two habits apart -----------------------------------------
+
+
+def test_canonical_name_ignores_a_download_counter_and_the_extension():
+    assert canonical_name("anmed (1).zip") == canonical_name("anmed.zip")
+    assert canonical_name("a/b/anmed (12).zip") == "anmed"
+    assert canonical_name("anmed.csv.gz") == "anmed"
+
+
+def test_a_trailing_number_that_is_not_a_counter_is_left_alone():
+    """Rows get deleted on the strength of this match, so it stays narrow.
+
+    ``charges_2024`` and ``charges_2023`` are different files. Collapsing them
+    would delete a year of data to save disk.
+    """
+
+    assert canonical_name("charges_2024.csv") != canonical_name("charges_2023.csv")
+    assert canonical_name("campus-2.csv") != canonical_name("campus.csv")
+
+
+def test_the_facility_split_reads_filenames_not_the_recorded_hospital_name(engine):
+    """Cone Health ships four facilities' files that all name the system.
+
+    Judging by ``hospital_name`` alone, this looks like one hospital downloaded
+    four times — and three files would be deleted. The filenames say otherwise.
+    """
+
+    load(engine, [
+        _source("581588823_TheMosesHConeMemorialHospital_standardcharges.csv", "581588823", 1419541, "Cone Health"),
+        _source("581588823_anniepennhospital_standardcharges.csv", "581588823", 1419541, "Cone Health"),
+        _source("581588823_conehealthbehavioralhealthhospital_standardcharges.csv", "581588823", 1419541, "Cone Health"),
+        _source("581588823_wesleylonghospital_standardcharges.csv", "581588823", 1419541, "Cone Health"),
+    ])
+
+    group = find_duplicate_loads(engine).groups[0]
+    assert group.distinct_names == 1            # what the files say inside
+    assert group.per_facility_datasets == 4     # what the filenames say
+    assert group.looks_like_one_file_per_facility is True
+    assert group.redownload_files == []         # nothing safe to delete here
+
+
+def test_a_re_download_inside_a_per_facility_group_is_still_found(engine):
+    """HealthOne's real shape: two facilities, one of them downloaded twice."""
+
+    load(engine, [
+        _source("84-1321373_HCA-HEALTHONE-SKY-RIDGE_standardcharges.json", "841321373", 3026183, "HealthOne"),
+        _source("84-1321373_HCA-HEALTHONE-SOUTH-PARKER-ER_standardcharges.json", "841321373", 3026183, "HealthOne"),
+        _source("84-1321373_HCA-HEALTHONE-SOUTH-PARKER-ER_standardcharges (1).json", "841321373", 3026183, "HealthOne"),
+    ])
+
+    group = find_duplicate_loads(engine).groups[0]
+    assert group.per_facility_datasets == 2
+    assert group.redownload_files == [
+        "84-1321373_HCA-HEALTHONE-SOUTH-PARKER-ER_standardcharges (1).json"
+    ]
+    assert group.redownload_rows == 3026183
+    assert group.per_facility_rows == 3026183
+    assert group.redundant_rows == group.redownload_rows + group.per_facility_rows
+
+
+def test_the_report_splits_deletable_rows_from_the_rest(engine):
+    load(engine, [
+        _source("dup.csv", "111111111", 1_000_000, "A"),
+        _source("dup (1).csv", "111111111", 1_000_000, "A"),
+        _source("north.json", "222222222", 1_500_000, "System"),
+        _source("south.json", "222222222", 1_500_000, "System"),
+    ])
+
+    report = find_duplicate_loads(engine)
+    assert report.redownload_rows == 1_000_000
+    assert report.per_facility_rows == 1_500_000
+    assert report.redundant_rows == 2_500_000
+    assert report.redownload_share == 20.0
+    assert report.per_facility_share == 30.0
+
+
+# --- pruning --------------------------------------------------------------
+
+
+def _with_charges(engine, spec):
+    """Insert sources and give each one its charge rows, so deletes are visible."""
+
+    with engine.begin() as conn:
+        for source_file, ein, count, name in spec:
+            result = conn.execute(
+                insert(charge_sources),
+                _source(source_file, ein, count, name),
+            )
+            source_id = int(result.inserted_primary_key[0])
+            conn.execute(
+                insert(standard_charges),
+                [{"source_id": source_id, "ein": ein, "code": str(i)} for i in range(count)],
+            )
+
+
+def _remaining(engine):
+    with engine.connect() as conn:
+        return {r[0] for r in conn.execute(select(charge_sources.c.source_file))}
+
+
+def test_a_dry_run_deletes_nothing(engine):
+    _with_charges(engine, [
+        ("akron.csv", "340714357", 3, "Akron"),
+        ("akron (1).csv", "340714357", 3, "Akron"),
+    ])
+
+    summary = prune_redownloads(engine)
+    assert summary.applied is False
+    assert summary.files == ["akron (1).csv"]
+    assert summary.rows == 3
+    assert _remaining(engine) == {"akron.csv", "akron (1).csv"}
+
+
+def test_applying_removes_the_copy_and_its_charge_rows(engine):
+    _with_charges(engine, [
+        ("akron.csv", "340714357", 3, "Akron"),
+        ("akron (1).csv", "340714357", 3, "Akron"),
+    ])
+
+    summary = prune_redownloads(engine, apply=True)
+    assert summary.applied is True
+    assert summary.file_count == 1
+    assert _remaining(engine) == {"akron.csv"}
+
+    with engine.connect() as conn:
+        left = conn.execute(select(standard_charges.c.id)).all()
+    assert len(left) == 3  # only the surviving copy's rows
+
+
+def test_the_copy_without_a_counter_is_the_one_kept(engine):
+    _with_charges(engine, [
+        ("anmed (1).zip", "570359174", 2, "AnMed"),
+        ("anmed (2).zip", "570359174", 2, "AnMed"),
+        ("anmed (3).zip", "570359174", 2, "AnMed"),
+        ("anmed.zip", "570359174", 2, "AnMed"),
+    ])
+
+    prune_redownloads(engine, apply=True)
+    assert _remaining(engine) == {"anmed.zip"}
+
+
+def test_pruning_never_touches_a_per_facility_copy(engine):
+    _with_charges(engine, [
+        ("581588823_anniepennhospital.csv", "581588823", 2, "Cone Health"),
+        ("581588823_wesleylonghospital.csv", "581588823", 2, "Cone Health"),
+    ])
+
+    summary = prune_redownloads(engine, apply=True)
+    assert summary.file_count == 0
+    assert len(_remaining(engine)) == 2
+
+
+def test_pruning_is_idempotent(engine):
+    _with_charges(engine, [
+        ("akron.csv", "340714357", 2, "Akron"),
+        ("akron (1).csv", "340714357", 2, "Akron"),
+    ])
+
+    prune_redownloads(engine, apply=True)
+    again = prune_redownloads(engine, apply=True)
+    assert again.file_count == 0
+    assert _remaining(engine) == {"akron.csv"}
+
+
+def test_a_batched_prune_removes_every_copy(engine):
+    _with_charges(
+        engine,
+        [(f"file{n}.csv", "111111111", 1, "A") for n in range(3)]
+        + [(f"file{n} (1).csv", "111111111", 1, "A") for n in range(3)],
+    )
+
+    summary = prune_redownloads(engine, apply=True, batch_size=2)
+    assert summary.file_count == 3
+    assert _remaining(engine) == {"file0.csv", "file1.csv", "file2.csv"}

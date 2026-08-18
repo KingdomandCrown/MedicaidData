@@ -25,7 +25,7 @@ from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
 from .db import count_charges, count_hospitals, make_engine
-from .duplicates import find_duplicate_loads
+from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
@@ -144,6 +144,20 @@ def build_parser() -> argparse.ArgumentParser:
     dupes.add_argument("--database-url", default=DEFAULT_DB_URL)
     dupes.add_argument(
         "--limit", type=int, default=25, help="Groups to list (default: 25)."
+    )
+
+    prune = sub.add_parser(
+        "prune-duplicates",
+        help="Delete extra copies of files downloaded twice (dry run unless --apply).",
+    )
+    prune.add_argument("--database-url", default=DEFAULT_DB_URL)
+    prune.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete. Without it, only report what would go.",
+    )
+    prune.add_argument(
+        "--limit", type=int, default=40, help="Files to list (default: 40)."
     )
 
     archive = sub.add_parser(
@@ -300,10 +314,19 @@ def _cmd_duplicates(args: argparse.Namespace) -> int:
         f"{report.total_rows:,} total."
     )
 
+    print(
+        f"  {report.redownload_rows:,} ({report.redownload_share}%) are the same file "
+        f"downloaded twice — {len(report.redownload_files)} file(s), safe to delete."
+    )
+    print(
+        f"  {report.per_facility_rows:,} ({report.per_facility_share}%) are one dataset "
+        "published per facility — a schema change, not a deletion."
+    )
+
     print(f"\nLargest {min(args.limit, len(report.groups))} group(s):")
     for group in report.groups[: args.limit]:
         kind = (
-            "one dataset published per facility"
+            f"{group.per_facility_datasets} facilities on one dataset"
             if group.looks_like_one_file_per_facility
             else "same file downloaded more than once"
         )
@@ -311,16 +334,45 @@ def _cmd_duplicates(args: argparse.Namespace) -> int:
             f"\n  EIN {group.ein} — {group.copies} copies x {group.charge_count:,} rows "
             f"({group.redundant_rows:,} redundant; {kind})"
         )
+        extras = set(group.redownload_files)
         for name in group.source_files[:6]:
-            print(f"    {name}")
+            mark = "  [re-download]" if name in extras else ""
+            print(f"    {name}{mark}")
         if group.copies > 6:
             print(f"    ... and {group.copies - 6} more")
 
     print(
-        "\nNothing was deleted. A charge_sources row is also the record that a "
-        "facility exists and what it is called, so dropping copies loses names "
-        "even where the charges are redundant."
+        "\nNothing was deleted. Run 'hospitals prune-duplicates' to drop the "
+        "re-downloads; the per-facility copies stay, because a charge_sources "
+        "row is also the record that a facility exists and what it is called."
     )
+    return 0
+
+
+def _cmd_prune_duplicates(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    summary = prune_redownloads(engine, apply=args.apply)
+
+    if not summary.file_count:
+        print("\nNo re-downloaded copies found.")
+        return 0
+
+    verb = "Deleted" if summary.applied else "Would delete"
+    print(f"\n{verb} {summary.file_count} re-downloaded file(s), {summary.rows:,} rows.")
+    for name in summary.files[: args.limit]:
+        print(f"  {name}")
+    if summary.file_count > args.limit:
+        print(f"  ... and {summary.file_count - args.limit} more")
+
+    if summary.applied:
+        print(
+            "\nSQLite frees these pages for reuse but does not shrink the file. "
+            "The next load fills the space instead of growing the database; "
+            "VACUUM would return it to the volume but needs as much free disk "
+            "as the database is large."
+        )
+    else:
+        print("\nDry run — nothing was deleted. Re-run with --apply.")
     return 0
 
 
@@ -421,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_link_charges(args)
     if args.command == "duplicates":
         return _cmd_duplicates(args)
+    if args.command == "prune-duplicates":
+        return _cmd_prune_duplicates(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
     if args.command == "gap-report":
