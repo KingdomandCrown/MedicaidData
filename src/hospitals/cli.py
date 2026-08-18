@@ -31,6 +31,7 @@ from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
+from .repair import repair_eins
 
 log = get_logger(__name__)
 
@@ -158,6 +159,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prune.add_argument(
         "--limit", type=int, default=40, help="Files to list (default: 40)."
+    )
+
+    repair = sub.add_parser(
+        "repair-eins",
+        help="Rewrite stored EINs to match their filenames (dry run unless --apply).",
+    )
+    repair.add_argument("--database-url", default=DEFAULT_DB_URL)
+    repair.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually rewrite. Without it, only report what disagrees.",
+    )
+    repair.add_argument(
+        "--sources-only",
+        action="store_true",
+        help="Fix charge_sources only; leave the charge rows for a later pass.",
+    )
+    repair.add_argument(
+        "--limit", type=int, default=40, help="Sources to list (default: 40)."
     )
 
     archive = sub.add_parser(
@@ -376,6 +396,47 @@ def _cmd_prune_duplicates(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_repair_eins(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    summary = repair_eins(
+        engine, apply=args.apply, sources_only=args.sources_only
+    )
+
+    if not summary.source_count:
+        print("\nEvery stored EIN matches its filename.")
+        return 0
+
+    verb = "Repaired" if summary.applied else "Would repair"
+    print(
+        f"\n{verb} {summary.source_count} source(s) whose stored EIN disagrees "
+        f"with the filename, covering {summary.charge_rows_affected:,} charge row(s)."
+    )
+    for fix in summary.fixes[: args.limit]:
+        note = "  <- invented from the NPI" if fix.drops_an_invented_ein else ""
+        print(
+            f"  {fix.stored_ein} -> {fix.correct_ein}  "
+            f"({fix.charge_count:,} rows)  {fix.source_file}{note}"
+        )
+    if summary.source_count > args.limit:
+        print(f"  ... and {summary.source_count - args.limit} more")
+
+    if summary.applied:
+        if summary.sources_only:
+            print(
+                "\ncharge_sources is correct; standard_charges.ein still holds the "
+                "old value. Re-run without --sources-only to finish."
+            )
+        else:
+            print(f"\nRewrote {summary.charge_rows_rewritten:,} charge row(s).")
+    else:
+        print(
+            "\nDry run — nothing was written. Re-run with --apply, or with "
+            "--apply --sources-only for an instant pass that leaves the charge "
+            "rows for later."
+        )
+    return 0
+
+
 def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     try:
         summary = archive_ingested(
@@ -475,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_duplicates(args)
     if args.command == "prune-duplicates":
         return _cmd_prune_duplicates(args)
+    if args.command == "repair-eins":
+        return _cmd_repair_eins(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
     if args.command == "gap-report":

@@ -143,6 +143,13 @@ def to_int(value) -> int | None:
 
 _EIN_RE = re.compile(r"(\d{2})-?(\d{7})")
 
+# The leading identifier block: digits and dashes before the descriptive name.
+# ``334038167-1669348991_atrium-...`` -> ``334038167-1669348991``.
+_ID_BLOCK_RE = re.compile(r"^[\d-]+")
+
+# An NPI is ten digits and begins with 1 or 2 (NPPES assigns no other prefix).
+_NPI_TOKEN_RE = re.compile(r"^[12]\d{9}$")
+
 
 def ein_from_filename(path: str) -> str | None:
     """Extract the 9-digit EIN from a CMS-convention MRF filename.
@@ -150,14 +157,69 @@ def ein_from_filename(path: str) -> str | None:
     CMS names files ``<ein>_<hospital-name>_standardcharges.<ext>``. The EIN may
     be written with a dash (``24-0795959``) or without (``386006309``), and some
     systems prefix the organizational NPI too: ``<ein>-<npi>_<name>``.
+
+    Some systems publish under the **NPI alone**, with no EIN at all:
+    ``1669348991_atrium-health-hospitals-inc_standardcharges.csv``. A ten-digit
+    NPI must not be read as a nine-digit EIN with a spare digit — that turned
+    Atrium's NPI 1669348991 into "EIN" 166934899 and filed 8.5 million charge
+    rows under an organization that does not exist, splitting the hospital from
+    its own data. Where the filename carries only an NPI, there is no EIN to
+    find, and saying so is better than inventing one.
     """
 
     base = _strip_hash_prefix(path)
-    match = _EIN_RE.match(base) or _EIN_RE.search(base)
-    if match:
-        return match.group(1) + match.group(2)
-    fallback = re.search(r"\d{9}", base)
-    return fallback.group(0) if fallback else None
+    block = _ID_BLOCK_RE.match(base)
+    if block:
+        for token in block.group(0).split("-"):
+            if _NPI_TOKEN_RE.match(token):
+                continue  # an NPI, not an EIN
+            match = _EIN_RE.fullmatch(token)
+            if match:
+                return match.group(1) + match.group(2)
+        # A dashed EIN splits into "24" and "0795959"; rejoin and retry.
+        rejoined = block.group(0).replace("-", "")
+        if not _NPI_TOKEN_RE.match(rejoined):
+            match = _EIN_RE.match(rejoined)
+            if match:
+                return match.group(1) + match.group(2)
+        return None
+
+    match = _EIN_RE.search(base)
+    return match.group(1) + match.group(2) if match else None
+
+
+def npi_from_filename(path: str) -> str | None:
+    """Extract the organizational NPI from the filename's identifier block.
+
+    Systems that publish under the NPI alone leave no EIN to key on, so this
+    is the only identifier such a file has until the metadata inside it is
+    read — and a file with no metadata preamble has nothing else at all.
+    """
+
+    base = _strip_hash_prefix(path)
+    block = _ID_BLOCK_RE.match(base)
+    if not block:
+        return None
+    for token in block.group(0).split("-"):
+        if _NPI_TOKEN_RE.match(token):
+            return token
+    return None
+
+
+def _adopt_filename_npi(metadata: "MrfMetadata", path: str) -> None:
+    """Fall back to the filename's NPI when the file itself names none.
+
+    Only a fallback: what the hospital wrote inside the file wins. But a file
+    published under its NPI with no metadata preamble would otherwise arrive
+    with no identifier at all now that a ten-digit NPI is no longer misread as
+    an EIN.
+    """
+
+    if metadata.npis:
+        return
+    npi = npi_from_filename(path)
+    if npi:
+        metadata.npis = [npi]
 
 
 def _without_gz(path: str) -> str:
@@ -537,13 +599,16 @@ def read_mrf(path: str, limit: int | None = None) -> tuple[MrfMetadata, Iterator
 
     metadata = parse_metadata(meta_header, meta_values)
     metadata.ein = ein_from_filename(path)
+    _adopt_filename_npi(metadata, path)
     metadata.source_file = _strip_hash_prefix(path)
     metadata.layout = detect_layout(data_header)
     if not meta_header:
         log.warning(
-            "%s: no metadata preamble — hospital identified by EIN %s only",
+            "%s: no metadata preamble — hospital identified by the filename only "
+            "(EIN=%s, NPI=%s)",
             metadata.source_file,
             metadata.ein,
+            metadata.primary_npi,
         )
     log.info(
         "MRF %s: %s (%s layout, NPI=%s, EIN=%s, version=%s)",
@@ -870,6 +935,7 @@ def read_mrf_json(path: str, limit: int | None = None) -> tuple[MrfMetadata, Ite
 
     metadata = _read_json_metadata(path)
     metadata.ein = ein_from_filename(path)
+    _adopt_filename_npi(metadata, path)
     metadata.source_file = _strip_hash_prefix(path)
     metadata.layout = "json"
     log.info(

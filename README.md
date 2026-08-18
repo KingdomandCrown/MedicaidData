@@ -232,6 +232,30 @@ SQLite frees the pages but does not shrink the file: the space is reused by the
 next load rather than returned to the volume. `VACUUM` would return it, but needs
 as much free disk as the database is large.
 
+### Repairing EINs written by an older parser
+
+The duplicate report is also how a parsing bug surfaces: the same Atrium file
+appeared under two EINs, `166934899` and `334038167`. The first is not an EIN —
+it is the organizational NPI `1669348991` with its last digit cut off, because
+the filename parser matched nine digits without checking whether ten were there.
+8.5 million charge rows were filed under an organization that does not exist,
+where no benchmark of the real hospital can see them.
+
+The parser now refuses to read a ten-digit NPI as an EIN and falls back to
+recording it as the NPI. For rows already written:
+
+```bash
+hospitals repair-eins --database-url sqlite:///data/round5.sqlite
+hospitals repair-eins --database-url sqlite:///data/round5.sqlite --apply
+```
+
+Dry run unless `--apply`, and safe to repeat — it re-derives each EIN from the
+filename, so running it again after any future parser change is the way to pick
+up the correction. `--sources-only` fixes the one row per file in
+`charge_sources` and skips the expensive half, which rewrites `standard_charges`
+for every charge row of every affected file. Prune first: there is no sense
+rewriting rows that are about to be deleted.
+
 ### Linking charges to POS hospitals
 
 Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by
@@ -366,6 +390,12 @@ hospitals prune-duplicates [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --apply                  Actually delete; without it, only report what would go
   --limit N                Files to list (default: 40)
+
+hospitals repair-eins [options]
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --apply                  Actually rewrite; without it, only report what disagrees
+  --sources-only           Fix charge_sources only; leave the charge rows for later
+  --limit N                Sources to list (default: 40)
 
 hospitals archive-ingested PATH --to DEST [options]
   PATH                     Folder of MRF files to tidy
