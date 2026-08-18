@@ -292,6 +292,25 @@ Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by
 **NPI → CCN crosswalk** that you supply as a CSV (columns `npi`, `ccn`, and an
 optional `name`):
 
+Getting that crosswalk is a command, not a chore — CMS publishes **Hospital
+Enrollments**, which lists the NPI and the CCN of every enrolled hospital:
+
+```bash
+hospitals fetch-crosswalk --database-url sqlite:///data/round5.sqlite
+hospitals backfill-npis  --database-url sqlite:///data/round5.sqlite --apply
+hospitals link-charges   --database-url sqlite:///data/round5.sqlite
+```
+
+`backfill-npis` matters as much as the crosswalk. Many published JSON files omit
+`type_2_npi` entirely while naming the NPI in the filename, so the column the
+linker reads is empty and the crosswalk has nothing to match. It stores the
+filename's NPI on those sources; dry run unless `--apply`.
+
+This is what the name heuristic cannot do: the largest publishers name a
+*system*. There is no hospital called Dignity Health — there are twenty — so
+`941196203-1770626426_dignity-health_standardcharges.json` matches nothing by
+name and exactly one hospital by NPI.
+
 ```bash
 # Load a crosswalk and link in one step
 hospitals link-charges --crosswalk /path/to/npi_ccn.csv

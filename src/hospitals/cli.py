@@ -26,6 +26,7 @@ from sqlalchemy.exc import OperationalError
 from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
+from .crosswalk import fetch_crosswalk
 from .db import count_charges, count_hospitals, make_engine
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
@@ -33,7 +34,7 @@ from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
-from .repair import repair_eins
+from .repair import backfill_npis, repair_eins
 
 log = get_logger(__name__)
 
@@ -188,6 +189,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=40, help="Sources to list (default: 40)."
     )
 
+    npis = sub.add_parser(
+        "backfill-npis",
+        help="Store the filename's NPI on sources that carry none (dry run unless --apply).",
+    )
+    npis.add_argument("--database-url", default=DEFAULT_DB_URL)
+    npis.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually write. Without it, only report what is missing.",
+    )
+    npis.add_argument(
+        "--limit", type=int, default=40, help="Sources to list (default: 40)."
+    )
+
     archive = sub.add_parser(
         "archive-ingested",
         help="Move files already loaded out of a folder (dry run unless --apply).",
@@ -227,6 +242,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="Hospitals a candidate system needs before it is ranked as one "
         "rather than listed as independents (default: 2).",
+    )
+
+    fetchx = sub.add_parser(
+        "fetch-crosswalk",
+        help="Download CMS Hospital Enrollments and build the NPI->CCN crosswalk.",
+    )
+    fetchx.add_argument("--database-url", default=DEFAULT_DB_URL)
+    fetchx.add_argument(
+        "--dataset-title",
+        default=None,
+        help="CMS dataset to read (default: Hospital Enrollments).",
     )
 
     xwalk = sub.add_parser(
@@ -463,6 +489,31 @@ def _cmd_repair_eins(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backfill_npis(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    summary = backfill_npis(engine, apply=args.apply)
+
+    if not summary.source_count:
+        print("\nEvery source that can have an NPI has one.")
+        return 0
+
+    verb = "Filled in" if summary.applied else "Would fill in"
+    print(
+        f"\n{verb} the NPI for {summary.source_count} source(s) that carry none, "
+        f"covering {summary.charge_rows_covered:,} charge row(s)."
+    )
+    for fix in summary.fixes[: args.limit]:
+        print(f"  {fix.npi}  ({fix.charge_count:,} rows)  {fix.source_file}")
+    if summary.source_count > args.limit:
+        print(f"  ... and {summary.source_count - args.limit} more")
+
+    if not summary.applied:
+        print("\nDry run — nothing was written. Re-run with --apply.")
+    else:
+        print("\nNow re-link:  hospitals link-charges --database-url <url>")
+    return 0
+
+
 def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     try:
         summary = archive_ingested(
@@ -542,6 +593,28 @@ def _cmd_gap_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_crosswalk(args: argparse.Namespace) -> int:
+    from .crosswalk import HOSPITAL_ENROLLMENT_TITLE
+
+    engine = make_engine(args.database_url)
+    summary = fetch_crosswalk(
+        engine, dataset_title=args.dataset_title or HOSPITAL_ENROLLMENT_TITLE
+    )
+
+    print(
+        f"\nLoaded {summary.loaded:,} NPI->CCN pairs from "
+        f"{summary.source_title} ({summary.source_modified}), "
+        f"{summary.rows_read:,} rows read."
+    )
+    if summary.conflict_count:
+        print(
+            f"{summary.conflict_count} NPI(s) appear with more than one CCN; "
+            "the first was kept."
+        )
+    print("\nNow re-link:  hospitals link-charges --database-url <url>")
+    return 0
+
+
 def _cmd_load_crosswalk(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     try:
@@ -592,10 +665,14 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_prune_duplicates(args)
     if args.command == "repair-eins":
         return _cmd_repair_eins(args)
+    if args.command == "backfill-npis":
+        return _cmd_backfill_npis(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
+    if args.command == "fetch-crosswalk":
+        return _cmd_fetch_crosswalk(args)
     if args.command == "load-crosswalk":
         return _cmd_load_crosswalk(args)
     parser.error(f"unknown command: {args.command}")

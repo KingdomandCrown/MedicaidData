@@ -153,3 +153,98 @@ def repair_eins(
         summary.charge_rows_rewritten,
     )
     return summary
+
+
+# --- filling in an NPI the file never carried -----------------------------
+
+
+@dataclass
+class NpiBackfill:
+    source_id: int
+    source_file: str
+    npi: str
+    charge_count: int
+
+
+@dataclass
+class NpiBackfillSummary:
+    fixes: list[NpiBackfill] = field(default_factory=list)
+    applied: bool = False
+
+    @property
+    def source_count(self) -> int:
+        return len(self.fixes)
+
+    @property
+    def charge_rows_covered(self) -> int:
+        return sum(f.charge_count or 0 for f in self.fixes)
+
+
+def find_missing_npis(engine: Engine) -> list[NpiBackfill]:
+    """Sources with no NPI stored whose filename supplies one.
+
+    Many published JSON files omit ``type_2_npi`` entirely — every Dignity
+    Health file in round 6 logged ``NPI None`` — while naming the NPI in the
+    filename. The NPI is the only key that resolves a system-level file to a
+    single hospital, so a file missing it cannot be linked at all.
+    """
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                charge_sources.c.id,
+                charge_sources.c.source_file,
+                charge_sources.c.npis,
+                charge_sources.c.primary_npi,
+                charge_sources.c.charge_count,
+            ).where(charge_sources.c.primary_npi.is_(None))
+        ).mappings().all()
+
+    out: list[NpiBackfill] = []
+    for row in rows:
+        if row["npis"]:
+            continue
+        npi = npi_from_filename(row["source_file"])
+        if not npi:
+            continue
+        out.append(
+            NpiBackfill(
+                source_id=row["id"],
+                source_file=row["source_file"],
+                npi=npi,
+                charge_count=row["charge_count"] or 0,
+            )
+        )
+    out.sort(key=lambda f: -f.charge_count)
+    return out
+
+
+def backfill_npis(engine: Engine, *, apply: bool = False) -> NpiBackfillSummary:
+    """Store the filename's NPI on sources that have none.
+
+    Only ``charge_sources`` is touched: ``standard_charges.primary_npi`` is a
+    denormalized copy used for filtering, not for linking, and rewriting
+    hundreds of millions of rows to fill it in is not worth doing for that.
+    """
+
+    fixes = find_missing_npis(engine)
+    summary = NpiBackfillSummary(fixes=fixes, applied=apply)
+
+    if not apply or not fixes:
+        log.info(
+            "%d source(s) have no NPI but a filename that supplies one, covering "
+            "%d charge row(s)",
+            summary.source_count,
+            summary.charge_rows_covered,
+        )
+        return summary
+
+    with engine.begin() as conn:
+        for fix in fixes:
+            conn.execute(
+                charge_sources.update()
+                .where(charge_sources.c.id == fix.source_id)
+                .values(primary_npi=fix.npi)
+            )
+    log.info("Filled in the NPI for %d source(s)", summary.source_count)
+    return summary

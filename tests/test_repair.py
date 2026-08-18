@@ -194,3 +194,90 @@ def test_biggest_files_are_listed_first(engine):
 
 def test_an_empty_database_has_nothing_to_repair(engine):
     assert repair_eins(engine, apply=True).source_count == 0
+
+
+# --- an NPI the file never carried ----------------------------------------
+
+
+def _load_source(engine, source_file, *, npis=None, primary_npi=None, count=1):
+    with engine.begin() as conn:
+        conn.execute(
+            insert(charge_sources),
+            dict(
+                source_file=source_file,
+                npis=npis,
+                primary_npi=primary_npi,
+                charge_count=count,
+                ingested_at=NOW,
+            ),
+        )
+
+
+DIGNITY = "941196203-1770626426_dignity-health_standardcharges.json"
+
+
+def test_a_file_with_no_npi_takes_it_from_the_filename(engine):
+    """Every Dignity Health file in round 6 logged 'NPI None'.
+
+    Their JSON omits type_2_npi while the filename names the NPI, and the NPI
+    is the only key that resolves a system-level file to one hospital.
+    """
+
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, DIGNITY, count=370062)
+
+    summary = backfill_npis(engine, apply=True)
+
+    assert summary.source_count == 1
+    assert summary.charge_rows_covered == 370062
+    assert _stored(engine)[DIGNITY][1] == "1770626426"
+
+
+def test_a_dry_run_writes_nothing(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, DIGNITY)
+    summary = backfill_npis(engine)
+
+    assert summary.source_count == 1
+    assert summary.applied is False
+    assert _stored(engine)[DIGNITY][1] is None
+
+
+def test_an_npi_already_stored_is_left_alone(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, DIGNITY, primary_npi="9999999999")
+    assert backfill_npis(engine, apply=True).source_count == 0
+    assert _stored(engine)[DIGNITY][1] == "9999999999"
+
+
+def test_a_metadata_npi_list_counts_as_having_one(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, DIGNITY, npis="1234567890|1234567891")
+    assert backfill_npis(engine, apply=True).source_count == 0
+
+
+def test_a_filename_with_no_npi_is_skipped(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, "24-0795959_geisinger_standardcharges.csv")
+    assert backfill_npis(engine, apply=True).source_count == 0
+
+
+def test_the_biggest_files_are_listed_first(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, "941196203-1770626426_a.json", count=10)
+    _load_source(engine, "941196203-1760510937_b.json", count=99)
+    assert [f.charge_count for f in backfill_npis(engine).fixes] == [99, 10]
+
+
+def test_backfilling_is_idempotent(engine):
+    from hospitals.repair import backfill_npis
+
+    _load_source(engine, DIGNITY)
+    backfill_npis(engine, apply=True)
+    assert backfill_npis(engine, apply=True).source_count == 0

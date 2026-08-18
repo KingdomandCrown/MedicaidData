@@ -100,11 +100,31 @@ def load_crosswalk(engine: Engine, csv_path: str, source: str = "manual") -> int
         log.warning("Crosswalk CSV %s had no usable rows", csv_path)
         return 0
 
-    npis = [r["npi"] for r in rows]
+    written = write_crosswalk_rows(engine, rows)
+    log.info("Loaded %d NPI->CCN crosswalk rows from %s", written, csv_path)
+    return written
+
+
+def write_crosswalk_rows(engine: Engine, rows: list[dict], batch_size: int = 500) -> int:
+    """Replace crosswalk entries for the NPIs in ``rows``.
+
+    Shared by the CSV loader and the CMS fetcher so both write the table the
+    same way. Batched because ``IN (...)`` with tens of thousands of NPIs is
+    not a query any engine enjoys.
+    """
+
+    if not rows:
+        return 0
+
     with engine.begin() as conn:
-        conn.execute(delete(npi_ccn_crosswalk).where(npi_ccn_crosswalk.c.npi.in_(npis)))
-        conn.execute(insert(npi_ccn_crosswalk), rows)
-    log.info("Loaded %d NPI->CCN crosswalk rows from %s", len(rows), csv_path)
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start : start + batch_size]
+            conn.execute(
+                delete(npi_ccn_crosswalk).where(
+                    npi_ccn_crosswalk.c.npi.in_([r["npi"] for r in batch])
+                )
+            )
+            conn.execute(insert(npi_ccn_crosswalk), batch)
     return len(rows)
 
 
@@ -141,6 +161,7 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
                 charge_sources.c.id,
                 charge_sources.c.hospital_name,
                 charge_sources.c.npis,
+                charge_sources.c.primary_npi,
                 charge_sources.c.license_state,
                 charge_sources.c.hospital_address,
             )
@@ -151,7 +172,13 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
             ccn = None
             method = None
 
-            for npi in (src["npis"] or "").split("|"):
+            # ``npis`` is the pipe-joined list from the file's metadata;
+            # ``primary_npi`` may have been filled in from the filename for a
+            # file that carried none. Either is a legitimate identifier.
+            candidates_npi = (src["npis"] or "").split("|")
+            if src["primary_npi"]:
+                candidates_npi.append(src["primary_npi"])
+            for npi in candidates_npi:
                 npi = npi.strip()
                 if npi and npi in crosswalk:
                     ccn, method = crosswalk[npi], "crosswalk_npi"
