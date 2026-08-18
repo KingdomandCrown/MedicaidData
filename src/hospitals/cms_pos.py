@@ -79,7 +79,21 @@ def _get_json(url: str, params: dict | None, session: requests.Session):
         raise CmsUnavailableError(
             f"{url} returned HTTP {resp.status_code}: {resp.text[:200]}"
         )
-    return resp.json()
+    try:
+        return resp.json()
+    except ValueError as exc:
+        # A 200 carrying HTML is the signature of something answering *for*
+        # CMS — a captive portal, a corporate proxy's block page, a CDN
+        # challenge. The JSONDecodeError alone ("Expecting value: line 1
+        # column 1") says only that the first character was not a brace, which
+        # is the least useful true statement available. What the body actually
+        # was is the whole diagnosis.
+        content_type = resp.headers.get("Content-Type", "unknown")
+        body = " ".join(resp.text[:300].split())
+        raise CmsUnavailableError(
+            f"{url} returned HTTP {resp.status_code} with {content_type}, "
+            f"not JSON — something is answering for CMS. Body starts: {body!r}"
+        ) from exc
 
 
 def discover_latest_distribution(

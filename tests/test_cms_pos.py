@@ -62,3 +62,68 @@ def test_cms_unavailable_raised_on_request_error(monkeypatch):
 
     with __import__("pytest").raises(cms_pos.CmsUnavailableError):
         cms_pos.discover_latest_distribution(session=Boom())
+
+
+# --- a 200 that is not JSON ------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status_code, text, content_type):
+        self.status_code = status_code
+        self.text = text
+        self.headers = {"Content-Type": content_type}
+
+    def json(self):
+        import json
+
+        return json.loads(self.text)
+
+
+class _FakeSession:
+    def __init__(self, response):
+        self._response = response
+        self.headers = {}
+
+    def get(self, url, params=None, timeout=None):
+        return self._response
+
+
+def test_html_served_with_a_200_names_what_came_back():
+    """`hospitals ingest --state ALL` died on "Expecting value: line 1 column 1".
+
+    True, and useless: it says the first character was not a brace. The body
+    was an HTML block page — something answering in CMS's place — and that is
+    the fact that tells you where to look.
+    """
+
+    import pytest
+
+    from hospitals import cms_pos
+
+    page = "<!DOCTYPE html><html><head><title>Access Denied</title></head>"
+    session = _FakeSession(_FakeResponse(200, page, "text/html; charset=utf-8"))
+
+    with pytest.raises(cms_pos.CmsUnavailableError) as excinfo:
+        cms_pos._get_json("https://data.cms.gov/x", None, session)
+
+    message = str(excinfo.value)
+    assert "not JSON" in message
+    assert "text/html" in message
+    assert "Access Denied" in message
+
+
+def test_a_json_body_is_still_returned_untouched():
+    from hospitals import cms_pos
+
+    session = _FakeSession(_FakeResponse(200, '[{"title": "POS"}]', "application/json"))
+    assert cms_pos._get_json("https://data.cms.gov/x", None, session) == [{"title": "POS"}]
+
+
+def test_an_http_error_still_reports_its_status():
+    import pytest
+
+    from hospitals import cms_pos
+
+    session = _FakeSession(_FakeResponse(503, "upstream down", "text/plain"))
+    with pytest.raises(cms_pos.CmsUnavailableError, match="HTTP 503"):
+        cms_pos._get_json("https://data.cms.gov/x", None, session)
