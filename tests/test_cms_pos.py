@@ -486,19 +486,66 @@ def test_the_other_datasets_that_matched_are_named(caplog):
             "distribution": [{"downloadURL": f"https://x/{modified}.csv", "mediaType": "text/csv"}],
         }
 
+    # Both add exactly two words, so neither is the closer match and the
+    # choice between them is arbitrary — precisely when it must be reported.
     payload = {"dataset": [
-        _ds("Provider of Services File - Hospital & Non-Hospital Facility", "2026-03-01"),
-        _ds("Provider of Services File - Internet Quality Improvement and Evaluation System", "2026-08-14"),
+        _ds("Provider of Services File - Clinical Laboratories", "2026-03-01"),
+        _ds("Provider of Services File - Rural Hospitals", "2026-08-14"),
     ]}
     url = "https://example.test/data.json"
     session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
 
     with caplog.at_level(logging.WARNING):
-        cms_pos.discover_latest_distribution(session=session, catalogs=((url, None, "dcat"),))
+        cms_pos.discover_latest_distribution(
+            session=session,
+            dataset_title="Provider of Services File",
+            catalogs=((url, None, "dcat"),),
+        )
 
     logged = " ".join(r.getMessage() for r in caplog.records)
-    assert "Internet Quality Improvement" in logged
-    assert "Hospital & Non-Hospital Facility" in logged
+    assert "Clinical Laboratories" in logged
+    assert "Rural Hospitals" in logged
+
+
+def test_the_hospital_file_is_not_lost_to_its_longer_named_sibling():
+    """iQIES's title is the QIES title plus the word "Internet".
+
+    A subset match accepts both, and iQIES is modified more often, so sorting
+    by date would load home health and hospice agencies in place of hospitals.
+    """
+
+    import json
+
+    from hospitals import cms_pos
+
+    def _ds(title, modified):
+        return {
+            "title": title, "identifier": title, "modified": modified,
+            "distribution": [{"downloadURL": f"https://x/{modified}.csv", "mediaType": "text/csv"}],
+        }
+
+    payload = {"dataset": [
+        # Renamed just enough that the exact tier misses, forcing a loose match.
+        _ds("Provider of Services File – Quality Improvement and Evaluation System", "2026-07-16"),
+        _ds("Provider of Services File - Internet Quality Improvement and Evaluation System", "2026-08-10"),
+    ]}
+    url = "https://example.test/data.json"
+    session = _catalog_session({url: _FakeResponse(200, json.dumps(payload), "application/json")})
+
+    latest = cms_pos.discover_latest_distribution(
+        session=session, catalogs=((url, None, "dcat"),)
+    )
+
+    assert "Internet" not in latest.title
+    assert latest.modified == "2026-07-16"  # the older file, and the right one
+
+
+def test_the_default_dataset_is_the_hospital_file():
+    from hospitals import cms_pos
+
+    assert cms_pos.POS_DATASET_TITLE == (
+        "Provider of Services File - Quality Improvement and Evaluation System"
+    )
 
 
 def test_a_named_dataset_title_is_honoured():

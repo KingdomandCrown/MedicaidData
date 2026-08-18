@@ -55,9 +55,14 @@ CATALOGS = (
     (METASTORE_ITEMS_URL, {"show-reference-ids": "true"}, "dkan"),
 )
 
-# Title of the POS dataset series we care about. CMS keeps this stable across
-# quarterly editions.
-POS_DATASET_TITLE = "Provider of Services File - Hospital & Non-Hospital Facilities"
+# Title of the POS dataset series we care about.
+#
+# CMS restructured this in 2026. The old "Hospital & Non-Hospital Facilities"
+# dataset is gone, replaced by three files named for the system that produces
+# them: QIES (hospitals — the file is literally Hospital_and_other.DATA), iQIES
+# (post-acute: home health, hospice, SNF, ASC) and Clinical Laboratories. The
+# hospital file is the one this pipeline is about.
+POS_DATASET_TITLE = "Provider of Services File - Quality Improvement and Evaluation System"
 
 DEFAULT_TIMEOUT = 120
 DEFAULT_PAGE_SIZE = 1000
@@ -187,9 +192,19 @@ def _matching_datasets(items, dataset_title: str) -> list[dict]:
         return same
 
     wanted = set(target.split())
-    superset = [it for it, norm in normalized if wanted <= set(norm.split())]
-    if superset:
-        return superset
+    supersets = [
+        (it, set(norm.split()) - wanted)
+        for it, norm in normalized
+        if wanted <= set(norm.split())
+    ]
+    if supersets:
+        # Prefer the title that adds the least. "Provider of Services File -
+        # Internet Quality Improvement and Evaluation System" is a superset of
+        # the QIES title by exactly one word, and picking it would load
+        # post-acute providers instead of hospitals. The closest match is the
+        # one with the fewest extra words, not the first or the newest.
+        fewest = min(len(extra) for _it, extra in supersets)
+        return [it for it, extra in supersets if len(extra) == fewest]
 
     return [it for it, norm in normalized if POS_TITLE_CORE in norm]
 

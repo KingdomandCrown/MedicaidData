@@ -67,6 +67,14 @@ duplicating them.
 
 ### Running offline / behind a restricted network
 
+CMS restructured this dataset in 2026. The old "Hospital & Non-Hospital
+Facilities" file is gone, replaced by three named for the system that produces
+them: **QIES** (hospitals — the file is literally `Hospital_and_other.DATA`),
+**iQIES** (post-acute: home health, hospice, SNF, ASC) and **Clinical
+Laboratories**. The pipeline defaults to the QIES file; `--dataset-title` picks
+a different one. Discovery matches titles by meaning rather than by exact
+string, and warns when it had to, naming every dataset that also matched.
+
 The default path discovers and streams the latest file directly from
 `data.cms.gov`. If outbound access to CMS is blocked (corporate proxy,
 sandboxed CI, egress policy), download the POS **Hospital & Non-Hospital
