@@ -137,3 +137,89 @@ def test_an_empty_database_moves_nothing(db_url, folder, tmp_path):
 def test_a_missing_folder_raises(db_url, tmp_path):
     with pytest.raises(NotADirectoryError):
         archive_ingested(str(tmp_path / "nope"), str(tmp_path / "out"), database_url=db_url)
+
+
+# --- subdirectories -------------------------------------------------------
+
+
+def _tree(tmp_path):
+    """A folder shaped like round 6: loose files plus a system's own folder."""
+
+    src = tmp_path / "round6"
+    (src / "HCA").mkdir(parents=True)
+    (src / "loose_standardcharges.csv").write_text("x")
+    (src / "HCA" / "62-1801359_HCA-HOUSTON_standardcharges.json").write_text("y")
+    (src / "HCA" / "84-1321373_HCA-HEALTHONE-ROSE_standardcharges.json").write_text("z")
+    return src
+
+
+HOUSTON = os.path.join("HCA", "62-1801359_HCA-HOUSTON_standardcharges.json")
+ROSE = os.path.join("HCA", "84-1321373_HCA-HEALTHONE-ROSE_standardcharges.json")
+
+
+def test_a_subdirectory_is_named_rather_than_passed_over_in_silence(tmp_path, db_url):
+    """The HCA folder loaded and then sat there looking like work to do.
+
+    archive-ingested skipped it without a word, so 335 already-ingested files
+    stayed on disk with nothing in the output to explain why.
+    """
+
+    src = _tree(tmp_path)
+    _record(db_url, "loose_standardcharges.csv", "62-1801359_HCA-HOUSTON_standardcharges.json")
+
+    summary = archive_ingested(str(src), str(tmp_path / "done"), database_url=db_url)
+
+    assert summary.skipped_dirs == ["HCA"]
+    assert summary.moved == ["loose_standardcharges.csv"]
+
+
+def test_recursive_reaches_files_inside_a_system_folder(tmp_path, db_url):
+    src = _tree(tmp_path)
+    _record(
+        db_url,
+        "loose_standardcharges.csv",
+        "62-1801359_HCA-HOUSTON_standardcharges.json",
+        "84-1321373_HCA-HEALTHONE-ROSE_standardcharges.json",
+    )
+
+    summary = archive_ingested(
+        str(src), str(tmp_path / "done"), database_url=db_url, recursive=True, apply=True
+    )
+
+    assert summary.skipped_dirs == []
+    assert sorted(summary.moved) == sorted([HOUSTON, ROSE, "loose_standardcharges.csv"])
+
+
+def test_the_subdirectory_is_recreated_at_the_destination(tmp_path, db_url):
+    """Flattening would collide: two systems each ship a standardcharges.json."""
+
+    src = _tree(tmp_path)
+    _record(db_url, "62-1801359_HCA-HOUSTON_standardcharges.json")
+    dest = tmp_path / "done"
+
+    archive_ingested(str(src), str(dest), database_url=db_url, recursive=True, apply=True)
+
+    assert (dest / "HCA" / "62-1801359_HCA-HOUSTON_standardcharges.json").exists()
+    assert not (src / "HCA" / "62-1801359_HCA-HOUSTON_standardcharges.json").exists()
+
+
+def test_an_unloaded_file_inside_a_subdirectory_stays(tmp_path, db_url):
+    src = _tree(tmp_path)
+    _record(db_url, "62-1801359_HCA-HOUSTON_standardcharges.json")
+
+    summary = archive_ingested(
+        str(src), str(tmp_path / "done"), database_url=db_url, recursive=True, apply=True
+    )
+
+    assert ROSE in summary.not_loaded
+    assert (src / "HCA" / "84-1321373_HCA-HEALTHONE-ROSE_standardcharges.json").exists()
+
+
+def test_a_recursive_dry_run_still_moves_nothing(tmp_path, db_url):
+    src = _tree(tmp_path)
+    _record(db_url, "62-1801359_HCA-HOUSTON_standardcharges.json")
+
+    archive_ingested(str(src), str(tmp_path / "done"), database_url=db_url, recursive=True)
+
+    assert (src / "HCA" / "62-1801359_HCA-HOUSTON_standardcharges.json").exists()
+    assert not (tmp_path / "done").exists()

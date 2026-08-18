@@ -423,6 +423,7 @@ hospitals archive-ingested PATH --to DEST [options]
   --to DEST                Folder to move loaded files into (created if missing)
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
   --apply                  Actually move; without it, only report what would move
+  --recursive              Descend into subdirectories, mirroring them at DEST
 
 hospitals gap-report [options]
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)

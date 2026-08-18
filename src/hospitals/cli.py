@@ -199,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Actually move the files. Without it, only report what would move.",
     )
+    archive.add_argument(
+        "--recursive",
+        action="store_true",
+        help="Descend into subdirectories, mirroring their layout at the destination.",
+    )
 
     gap = sub.add_parser(
         "gap-report",
@@ -446,6 +451,7 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
             args.destination,
             database_url=args.database_url,
             apply=args.apply,
+            recursive=args.recursive,
         )
     except NotADirectoryError as exc:
         log.error("Not a directory: %s", exc)
@@ -465,6 +471,14 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
             print(f"  {name}")
     if summary.other_files:
         print(f"\nIgnored (not an ingestible file type): {len(summary.other_files)}")
+    if summary.skipped_dirs:
+        print(
+            f"\nNot looked at — subdirector"
+            f"{'y' if len(summary.skipped_dirs) == 1 else 'ies'} "
+            f"({len(summary.skipped_dirs)}), pass --recursive to include:"
+        )
+        for name in summary.skipped_dirs:
+            print(f"  {name}/")
 
     if summary.dry_run and summary.moved:
         print("\nThis was a dry run. Re-run with --apply to move them.")
