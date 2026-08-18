@@ -188,6 +188,29 @@ for a store rebuilt from files on disk.
 Only one ingest may write at a time. Starting a second one against the same
 database will fail — that is SQLite, not a bug.
 
+### Finding data stored twice
+
+Two habits put the same rows in the store repeatedly: a folder holding both
+`file.csv` and `file (1).csv`, and a large system publishing **one file per
+EIN** with a copy named for each facility. HCA does the latter — thirteen
+HealthOne facilities share EIN `841321373`, and their row counts repeat in
+clusters because several names point at one dataset.
+
+```bash
+hospitals duplicates --database-url sqlite:///data/round5.sqlite
+```
+
+Files are grouped by EIN *and* exact row count: two files agreeing to the digit
+across three million rows are the same data, not a coincidence. The report says
+how many rows are redundant and what share of the store they are, and
+distinguishes a re-download (one facility name) from one-dataset-per-facility
+(several names).
+
+It reports and does not delete. A `charge_sources` row is also the record that a
+facility exists and what it is called, so dropping copies loses names even where
+the charges are redundant. Storing one copy with many facilities pointing at it
+is a schema change, and a deliberate one.
+
 ### Linking charges to POS hospitals
 
 Price-transparency files are keyed by **NPI/EIN**; POS hospitals are keyed by
@@ -314,6 +337,10 @@ hospitals ingest-charges PATH [options]
   --continue-on-error      Log and skip failing files; report them at the end
   --echo-sql               Echo SQL statements (debugging)
 
+hospitals duplicates [options]
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --limit N                Groups to list (default: 25)
+
 hospitals archive-ingested PATH --to DEST [options]
   PATH                     Folder of MRF files to tidy
   --to DEST                Folder to move loaded files into (created if missing)
@@ -427,6 +454,7 @@ src/hospitals/
   link.py               NPI->CCN crosswalk loader + charge<->hospital linker
   gap.py                download worklist: coverage gap, system ranking, .xlsx
   archive.py            move loaded files out of the working folder
+  duplicates.py         report datasets stored more than once
   db.py                 SQLAlchemy schema + dialect-aware upsert (SQLite/Postgres)
   states.py             USPS / SSA / FIPS state reference data
   logging_config.py     logging setup
@@ -454,6 +482,7 @@ tests/
   test_link.py                   crosswalk load + NPI/name linking
   test_gap.py                    brand inference, coverage gap, workbook
   test_archive.py                folder tidying, dry run, collision safety
+  test_duplicates.py             duplicate-load detection and its limits
 ```
 
 ---

@@ -25,6 +25,7 @@ from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
 from .db import count_charges, count_hospitals, make_engine
+from .duplicates import find_duplicate_loads
 from .gap import build_gap_report, write_xlsx
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
@@ -134,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-name-fallback",
         action="store_true",
         help="Disable the name+state heuristic; use the crosswalk only.",
+    )
+
+    dupes = sub.add_parser(
+        "duplicates",
+        help="Report charge files that hold the same rows more than once.",
+    )
+    dupes.add_argument("--database-url", default=DEFAULT_DB_URL)
+    dupes.add_argument(
+        "--limit", type=int, default=25, help="Groups to list (default: 25)."
     )
 
     archive = sub.add_parser(
@@ -273,6 +283,47 @@ def _cmd_link_charges(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_duplicates(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    report = find_duplicate_loads(engine)
+
+    if not report.groups:
+        print("\nNo duplicate loads found.")
+        return 0
+
+    print(
+        f"\n{report.redundant_files} of {report.total_sources} charge file(s) hold rows "
+        f"already stored under the same EIN."
+    )
+    print(
+        f"{report.redundant_rows:,} redundant rows — {report.share_of_rows}% of "
+        f"{report.total_rows:,} total."
+    )
+
+    print(f"\nLargest {min(args.limit, len(report.groups))} group(s):")
+    for group in report.groups[: args.limit]:
+        kind = (
+            "one dataset published per facility"
+            if group.looks_like_one_file_per_facility
+            else "same file downloaded more than once"
+        )
+        print(
+            f"\n  EIN {group.ein} — {group.copies} copies x {group.charge_count:,} rows "
+            f"({group.redundant_rows:,} redundant; {kind})"
+        )
+        for name in group.source_files[:6]:
+            print(f"    {name}")
+        if group.copies > 6:
+            print(f"    ... and {group.copies - 6} more")
+
+    print(
+        "\nNothing was deleted. A charge_sources row is also the record that a "
+        "facility exists and what it is called, so dropping copies loses names "
+        "even where the charges are redundant."
+    )
+    return 0
+
+
 def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     try:
         summary = archive_ingested(
@@ -368,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_ingest_charges(args)
     if args.command == "link-charges":
         return _cmd_link_charges(args)
+    if args.command == "duplicates":
+        return _cmd_duplicates(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
     if args.command == "gap-report":
