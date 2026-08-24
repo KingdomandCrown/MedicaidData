@@ -233,6 +233,7 @@ def test_write_xlsx_has_every_sheet(engine, tmp_path):
         "Independents by State",
         "State Coverage",
         "Unattributed Files",
+        "How to find a file",
     ]
 
     systems = book["Priority Systems"]
@@ -301,3 +302,82 @@ def test_unattributed_files_are_listed_biggest_first(engine):
 
     report = build_gap_report(engine)
     assert [u.source_file for u in report.unattributed] == ["big.csv", "small.csv"]
+
+
+# --- finding the file to download -----------------------------------------
+
+
+def test_the_search_url_pins_the_hospital_and_the_right_words():
+    from hospitals.gap import mrf_search_url
+
+    url = mrf_search_url("Pratt Regional Medical Center", "Pratt", "KS")
+
+    assert url.startswith("https://www.google.com/search?q=")
+    assert "%22Pratt+Regional+Medical+Center%22" in url  # quoted, so it pins
+    assert "Pratt" in url and "KS" in url
+    assert "machine+readable" in url
+    assert "standard+charges" in url
+
+
+def test_a_name_with_punctuation_is_escaped():
+    from hospitals.gap import mrf_search_url
+
+    url = mrf_search_url("HCA HealthOne Presbyterian St Luke\'s", state="CO")
+    assert " " not in url
+    assert "Luke%27s" in url
+
+
+def test_city_and_state_are_optional():
+    from hospitals.gap import mrf_search_url
+
+    assert "%22Ochsner+Health%22" in mrf_search_url("Ochsner Health")
+
+
+def _seed_gaps(engine):
+    with engine.begin() as conn:
+        conn.execute(
+            insert(hospitals),
+            [
+                _hospital("450001", "Ascension Providence Hospital", "TX"),
+                _hospital("450002", "Ascension Seton Medical Center", "TX"),
+                _hospital("170001", "Prairie Community Hospital", "KS"),
+            ],
+        )
+
+
+def test_the_workbook_carries_a_clickable_link_on_both_worklists(engine, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    _seed_gaps(engine)
+
+    out = str(tmp_path / "gaps.xlsx")
+    write_xlsx(build_gap_report(engine), out)
+    book = openpyxl.load_workbook(out)
+
+    systems = book["Priority Systems"]
+    assert systems.cell(row=1, column=8).value == "Find MRF"
+    assert systems.cell(row=2, column=8).value == "Find MRF"
+    assert systems.cell(row=2, column=8).hyperlink.target.startswith("https://")
+
+    independents = book["Independents by State"]
+    assert independents.cell(row=1, column=7).value == "Find MRF"
+    assert independents.cell(row=2, column=7).hyperlink.target.startswith("https://")
+
+
+def test_the_workbook_explains_the_cms_index_path(engine, tmp_path):
+    """The domain shortcut is worth more than the search once you know it."""
+
+    openpyxl = pytest.importorskip("openpyxl")
+    _seed_gaps(engine)
+
+    out = str(tmp_path / "gaps.xlsx")
+    write_xlsx(build_gap_report(engine), out)
+
+    book = openpyxl.load_workbook(out)
+    assert "How to find a file" in book.sheetnames
+    text = " ".join(
+        str(c.value)
+        for row in book["How to find a file"].iter_rows()
+        for c in row
+        if c.value
+    )
+    assert "cms-hpt.txt" in text

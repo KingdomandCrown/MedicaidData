@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from urllib.parse import quote_plus
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -330,6 +331,33 @@ _SHEETS = (
 )
 
 
+# CMS requires every hospital to publish a machine-readable index at this path
+# on its own domain, which is the shortest route to the file once you know the
+# domain. Neither the POS file nor Hospital Enrollments carries a website, so
+# the domain is the one thing this cannot supply.
+CMS_HPT_INDEX_PATH = "/cms-hpt.txt"
+
+_SEARCH_BASE = "https://www.google.com/search?q="
+
+
+def mrf_search_url(name: str, city: str | None = None, state: str | None = None) -> str:
+    """A search that lands on the hospital's price-transparency page.
+
+    The honest limit: no public CMS dataset maps a hospital to its website, so
+    a real file URL cannot be derived. What removes most of the manual work is
+    a query already narrowed to the right words — the quoted name pins the
+    hospital, and the rest are the terms these pages actually use.
+    """
+
+    terms = [f'"{name}"']
+    if city:
+        terms.append(city)
+    if state:
+        terms.append(state)
+    terms += ["price transparency", "machine readable", "standard charges"]
+    return _SEARCH_BASE + quote_plus(" ".join(terms))
+
+
 def write_xlsx(report: GapReport, path: str) -> str:
     """Write the report to a three-sheet workbook and return the path."""
 
@@ -343,7 +371,13 @@ def write_xlsx(report: GapReport, path: str) -> str:
     book = openpyxl.Workbook()
     bold = Font(bold=True)
 
-    def sheet(title: str, headers: list[str], rows: list[list], first: bool = False):
+    def sheet(
+        title: str,
+        headers: list[str],
+        rows: list[list],
+        first: bool = False,
+        link_column: int | None = None,
+    ):
         ws = book.active if first else book.create_sheet()
         ws.title = title
         ws.append(headers)
@@ -351,6 +385,17 @@ def write_xlsx(report: GapReport, path: str) -> str:
             cell.font = bold
         for row in rows:
             ws.append(row)
+        if link_column is not None:
+            # The URL is long and the same shape every time, so show a label
+            # and hang the link off it — a column of visible query strings
+            # would push everything else off the screen.
+            for row_idx in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row_idx, column=link_column)
+                url = cell.value
+                if url:
+                    cell.value = "Find MRF"
+                    cell.hyperlink = url
+                    cell.style = "Hyperlink"
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
         for i, header in enumerate(headers, start=1):
@@ -368,6 +413,7 @@ def write_xlsx(report: GapReport, path: str) -> str:
             "Source already known",
             "Known file (same publisher)",
             "Example hospitals",
+            "Find MRF",
         ],
         [
             [
@@ -378,19 +424,30 @@ def write_xlsx(report: GapReport, path: str) -> str:
                 "YES" if s.already_publishing else "",
                 s.known_source or "",
                 "; ".join(s.examples),
+                mrf_search_url(s.system.title(), state=s.states[0] if s.states else None),
             ]
             for n, s in enumerate(report.systems, start=1)
         ],
         first=True,
+        link_column=8,
     )
 
     sheet(
         _SHEETS[1],
-        ["State", "CCN", "Hospital", "City", "Type", "Certified beds"],
+        ["State", "CCN", "Hospital", "City", "Type", "Certified beds", "Find MRF"],
         [
-            [g.state, g.ccn, g.name, g.city or "", g.subtype or "", g.beds or ""]
+            [
+                g.state,
+                g.ccn,
+                g.name,
+                g.city or "",
+                g.subtype or "",
+                g.beds or "",
+                mrf_search_url(g.name, g.city, g.state),
+            ]
             for g in report.independents
         ],
+        link_column=7,
     )
 
     sheet(
@@ -433,6 +490,33 @@ def write_xlsx(report: GapReport, path: str) -> str:
             for u in report.unattributed
         ],
     )
+
+    notes = book.create_sheet()
+    notes.title = "How to find a file"
+    for line in [
+        ["Finding a hospital's machine-readable file"],
+        [],
+        ["1.", "Click 'Find MRF' on either worklist sheet. The search is already"],
+        ["", "narrowed to the hospital and the words these pages use."],
+        [],
+        ["2.", "Once you know the hospital's domain, skip the search entirely:"],
+        ["", f"https://<their-domain>{CMS_HPT_INDEX_PATH}"],
+        ["", "CMS requires every hospital to publish that index, and it names the"],
+        ["", "file's real URL. It is the fastest route and the one a crawler"],
+        ["", "should try first."],
+        [],
+        ["3.", "Work the Priority Systems sheet before the independents: one"],
+        ["", "system page often carries every facility it owns, so a single"],
+        ["", "download can cover dozens of hospitals."],
+        [],
+        ["Note", "No public CMS dataset maps a hospital to its website, so this"],
+        ["", "workbook cannot give you the file URL directly. The search link is"],
+        ["", "the closest thing the available data supports."],
+    ]:
+        notes.append(line)
+    notes.column_dimensions["A"].width = 8
+    notes.column_dimensions["B"].width = 78
+    notes["A1"].font = bold
 
     book.save(path)
     log.info("Wrote %s", path)
