@@ -35,6 +35,7 @@ from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
+from .price import price_for_code
 from .repair import backfill_npis, repair_eins
 from .scan import human_bytes, scan_for_ingested, write_listing
 
@@ -226,6 +227,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--recursive",
         action="store_true",
         help="Descend into subdirectories, mirroring their layout at the destination.",
+    )
+
+    price = sub.add_parser(
+        "price",
+        help="What one billing code costs across every hospital in the database.",
+    )
+    price.add_argument("code", help="A billing code, e.g. 85025 (CBC with differential).")
+    price.add_argument("--database-url", default=DEFAULT_DB_URL)
+    price.add_argument("--state", default=None, help="Restrict to hospitals in one state.")
+    price.add_argument("--payer", default=None, help="Restrict to payers matching this text.")
+    price.add_argument(
+        "--include-unlinked",
+        action="store_true",
+        help="Include files not attributed to a hospital (wider, less certain).",
+    )
+    price.add_argument(
+        "--limit", type=int, default=15, help="Payers to list (default: 15)."
     )
 
     cov = sub.add_parser(
@@ -588,6 +606,57 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_price(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    report = price_for_code(
+        engine,
+        args.code,
+        state=args.state,
+        payer=args.payer,
+        linked_only=not args.include_unlinked,
+    )
+
+    if not report.rows:
+        print(f"\nNo prices recorded for code {args.code}.")
+        return 0
+
+    where = f" in {args.state.upper()}" if args.state else ""
+    print(
+        f"\nCode {args.code}"
+        + (f" — {report.common_description}" if report.common_description else "")
+    )
+    print(
+        f"{report.rows:,} price(s) across {report.hospital_count:,} hospital(s){where}."
+    )
+
+    def line(spread):
+        if not spread.count:
+            return f"  {spread.label:<16}  no prices recorded"
+        return (
+            f"  {spread.label:<16}  median ${spread.median:,.2f}"
+            f"   (25th ${spread.p25:,.2f} · 75th ${spread.p75:,.2f})"
+            f"   n={spread.count:,}"
+        )
+
+    print()
+    for spread in (report.gross, report.cash, report.negotiated):
+        print(line(spread))
+
+    payers = report.top_payers[: args.limit]
+    if payers:
+        print(f"\nNegotiated by payer (top {len(payers)} by volume):")
+        for payer in payers:
+            print(f"  ${payer.median:>10,.2f}   n={payer.count:>6,}   {payer.payer}")
+
+    if report.negotiated.count:
+        print(
+            f"\nSpread: ${report.negotiated.low:,.2f} to ${report.negotiated.high:,.2f}. "
+            "Medians, not means — a chargemaster's long tail makes an average "
+            "no patient experiences."
+        )
+    return 0
+
+
 def _cmd_coverage(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     report = coverage_for(engine, args.pattern, state=args.state)
@@ -804,6 +873,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_backfill_npis(args)
     if args.command == "archive-ingested":
         return _cmd_archive_ingested(args)
+    if args.command == "price":
+        return _cmd_price(args)
     if args.command == "coverage":
         return _cmd_coverage(args)
     if args.command == "scan-ingested":

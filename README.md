@@ -445,6 +445,14 @@ hospitals repair-eins [options]
   --sources-only           Fix charge_sources only; leave the charge rows for later
   --limit N                Sources to list (default: 40)
 
+hospitals price CODE [options]
+  CODE                     A billing code, e.g. 85025 (CBC with differential)
+  --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
+  --state ST               Restrict to hospitals in one state
+  --payer NAME             Restrict to payers matching this text
+  --include-unlinked       Include files not attributed to a hospital
+  --limit N                Payers to list (default: 15)
+
 hospitals coverage PATTERN [options]
   PATTERN                  Part of a hospital, system, or file name
   --database-url URL       SQLAlchemy URL (default: sqlite:///data/hospitals.sqlite)
