@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "What each customer bought. Copy to orgs.json and keep it out of git.",
+    "directory.json says who works for which org; this says which hospitals",
+    "that org may read. Every route that takes ?ccn= is checked against it.",
+    "An org with no entry here sees nothing — the failure points at a support",
+    "ticket rather than at a breach.",
+    "minerva_admin holds org \"*\" and is not listed here; \"*\" is rejected.",
+    "A CCN listed under two orgs fails at startup, not at request time."
+  ],
+
+  "pratt": {
+    "name": "Pratt Regional Medical Center",
+    "ccns": ["170027"]
+  }
+}

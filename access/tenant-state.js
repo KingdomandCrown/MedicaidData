@@ -36,6 +36,19 @@
 const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000; // a working day
 const DEFAULT_MAX_CALLERS = 500;
 
+/**
+ * The verified identity on a request.
+ *
+ * `access-control.js` attaches `req.minerva = { email, org, role }`. Earlier
+ * drafts of this file assumed a generic `req.user = { sub, orgId }`, which read
+ * fine on its own and threw on every request once the two were wired together —
+ * the guard never sets `req.user`. Both shapes are accepted now, and `minerva`
+ * wins, so this cannot drift apart from the guard again.
+ */
+function identityOf(req) {
+  return (req && (req.minerva || req.user)) || null;
+}
+
 class TenantState {
   /**
    * @param {object} [options]
@@ -67,7 +80,7 @@ class TenantState {
    * handing back shared state would restore the exact bug this replaces.
    */
   keyFor(req) {
-    const user = req && req.user;
+    const user = identityOf(req);
     const key = user && (user.sub || user.email);
     if (!key) {
       throw new Error(
@@ -89,9 +102,10 @@ class TenantState {
       entry = undefined;
     }
     if (!entry) {
+      const identity = identityOf(req) || {};
       entry = {
         state: this._defaults(),
-        org: (req.user && req.user.orgId) || null,
+        org: identity.org || identity.orgId || null,
         touchedAt: now,
       };
       this._entries.set(key, entry);
@@ -160,4 +174,4 @@ class TenantState {
   }
 }
 
-module.exports = { TenantState, DEFAULT_TTL_MS, DEFAULT_MAX_CALLERS };
+module.exports = { TenantState, identityOf, DEFAULT_TTL_MS, DEFAULT_MAX_CALLERS };

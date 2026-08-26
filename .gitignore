@@ -22,5 +22,8 @@ data/
 .idea/
 .vscode/
 
-# MinervaAI access control — never commit the real directory
+# MinervaAI access control — never commit the real directory, the customer
+# roster, or the record of who read what
 access/directory.json
+access/orgs.json
+access-audit.log

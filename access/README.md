@@ -5,10 +5,19 @@ answer **whose data may they see**, which is the question a pilot with a named
 hospital turns on. This module supplies the second half.
 
 ```
-Cloudflare Access  ──►  accessGuard  ──►  your routes
-   authentication       authorization      org-scoped queries
-   (email + MFA)        (org + role)
+Cloudflare Access  ──►  accessGuard  ──►  scope  ──►  your routes
+   authentication       authorization     which        per-caller state
+   (email + MFA)        (org + role)      hospital
 ```
+
+Four files, in the order a request meets them:
+
+| File | Answers |
+|---|---|
+| `access-control.js` | Is this a real Access token, and whose is it? |
+| `scope.js` | May this organization read *this hospital*? |
+| `tenant-state.js` | Whose uploaded document is this? |
+| `boot.js` | Assembles the three in one call |
 
 ## Installing
 
@@ -32,13 +41,44 @@ alone: that file is your customer list, not something an install created.
 
 ## Wiring it up
 
+For `minerva-4.0/server.js` this is scripted, because that file is known:
+
+```bash
+node access/patch-minerva-server.js            # report only, changes nothing
+node access/patch-minerva-server.js --apply    # write it, after a backup
+```
+
+23 edits. It refuses to write if any anchor has moved, backs the file up first,
+and is safe to run twice. `access/test/patch-minerva-server.test.js` checks that
+every anchor matches, that the result still parses, and that no route taking a
+`?ccn=` is left unchecked.
+
+For anything else, three lines near the top:
+
 ```js
 const express = require("express");
+const { bootAccess } = require("./access/boot");
+
+const app = express();
+const access = bootAccess({ appDir: __dirname });
+
+app.use("/api", access.guard);
+```
+
+`bootAccess` reads `access/directory.json` and `access/orgs.json`, builds the
+guard, the scope, and the per-caller state store, and **throws if Access is not
+configured** — see *It refuses to start* below. Then, after the last route:
+
+```js
+app.use(access.accessErrorHandler);   // a denial is a 403, not a 500
+```
+
+If you would rather assemble it by hand:
+
+```js
 const {
   createAccessGuard, requireRole, orgFilter, assertOrg, ROLES,
 } = require("./access/access-control");
-
-const app = express();
 
 app.use(createAccessGuard({
   teamDomain: "minervaai.cloudflareaccess.com",  // your Access team domain
@@ -65,6 +105,122 @@ app.post("/api/users", requireRole(ROLES.ORG_ADMIN), createUser);
 
 `req.minerva` is `{ email, org, role }`. Read the org from there and nowhere
 else — a query string or request body is client-controlled.
+
+## The hospital is in the query string
+
+Authentication is not the whole problem, and on this app it is not even the
+interesting half. Every scorecard route takes the hospital as a parameter:
+
+```
+GET /api/scorecard?ccn=170027
+```
+
+A verified, provisioned, correctly-roled user at Pratt Regional changes six
+digits and reads a competitor's margin, quality scores, 340B position, and
+negotiated prices. Their role is *right* — they are allowed to read a scorecard.
+The missing check is which one.
+
+So each org gets a roster of CCNs in `orgs.json`, and every route that accepts
+one checks it:
+
+```js
+app.get("/api/scorecard", (req, res) => {
+  access.scope.assertCcn(req, req.query.ccn);   // 403 unless it is theirs
+  res.json(vault.scorecard(req.query.ccn));
+});
+```
+
+```json
+{
+  "pratt": { "name": "Pratt Regional Medical Center", "ccns": ["170027"] }
+}
+```
+
+An org with no entry sees nothing rather than everything: a missing line in a
+config file should be a support ticket, not a breach. Startup rejects a CCN
+sold to two orgs, and a CCN written as a JSON number — `070027` parses as
+`70027`, matches nothing, and the customer just sees an empty picker.
+
+The denial says the same thing for a hospital that belongs to someone else and
+one that does not exist. Telling those apart turns the endpoint into a list of
+who is a customer.
+
+### Reading across hospitals
+
+Two routes have to, and refusing them outright removes the product.
+`/api/state-ranking` scores every hospital in a state and returns them by name;
+that is a competitive-intelligence file on 120 organizations, and no customer
+bought it. But *"you rank 31st of 120"* is a fact about the subscriber, and that
+is the part they did buy.
+
+`scope.summarize()` draws the line. The caller's own rows come back whole; the
+peers come back as a percentile rank and — only above the cohort floor — a
+quartile band, on `benchmark.js`'s rules:
+
+```js
+res.json(scope.summarize(req, payload, {
+  valueKey: "score",
+  cohortLabel: state + " hospitals",
+  higherIsBetter: true,
+}));
+```
+
+No peer names, no peer values, no minimum, no maximum. A `minerva_admin` gets
+the payload untouched, so the internal view is not degraded by a control meant
+for customers.
+
+## Per-caller state
+
+`server.js` kept three values at module scope — one copy each, for the whole
+process:
+
+```js
+let uploadedDoc  = null;   // spliced into the prompt of whoever chats next
+let lastEnvelope = null;   // what /api/export writes into a .docx
+let lastAgentId  = DEFAULT_AGENT;
+```
+
+Correct for a single-user demo, wrong the moment a second organization signs in.
+One client's uploaded budget becomes context in another client's conversation;
+`/api/export` builds a memo from another client's scorecard. Neither needs a
+mistake by a user — they leak by working as written, and both callers passed
+every check at the door.
+
+`TenantState` keys that state by caller rather than by organization. Per-org
+would close the cross-tenant hole, but two colleagues at the same hospital would
+still find each other's uploads appearing mid-conversation. Entries expire, so a
+chat server does not accumulate the full text of every document anyone has ever
+sent.
+
+```js
+app.post("/api/upload", upload.single("file"), (req, res) => {
+  tenants.for(req).uploadedDoc = { name, text };
+});
+```
+
+`/health` reported the uploaded document's *filename*, unauthenticated. It
+reports a caller count now.
+
+## It refuses to start
+
+Without `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` there is no way to verify a token,
+and the only two behaviours available are "reject everything" or "trust
+everything". `bootAccess` throws, with both variable names in the message.
+
+A server that will not start is a five-minute problem with an obvious cause. A
+server that starts and serves every hospital's data to whoever finds the port is
+the other kind.
+
+There is a development path, because refusing to run on a laptop is how a
+control ends up commented out:
+
+```bash
+MINERVA_DEV_IDENTITY=cfo@prattregional.org node server.js
+```
+
+It prints a banner on first use, refuses to load when `NODE_ENV=production`, and
+refuses an identity that `directory.json` would itself deny — otherwise the
+first thing anyone meets in production is a 403 they never saw locally.
 
 ## Lock the origin, or none of this holds
 
@@ -166,10 +322,23 @@ other and isolate a single hospital. Cohorts must come from the fixed `COHORTS`
 set — `assertPredefinedCohort` rejects anything else with a 400. Never build a
 cohort from query-string filters.
 
+## The two config files
+
+Copy both examples and keep both out of git. `directory.json` is a list of your
+customers' staff; `orgs.json` is a list of what each customer bought.
+
+```bash
+cp access/directory.example.json access/directory.json
+cp access/orgs.example.json access/orgs.json
+```
+
+One says who works for whom, the other says which hospitals they may read.
+Neither is optional: a user in `directory.json` whose org is absent from
+`orgs.json` signs in successfully and sees nothing.
+
 ## The directory
 
-Copy `directory.example.json` to `directory.json` and keep it out of git — it is
-a list of your customers' staff. An email Access admits but the directory does
+`directory.json` is a list of your customers' staff. An email Access admits but the directory does
 not list is denied (`403 not_provisioned`) rather than given a default org.
 
 Malformed entries fail at startup, not at request time: an unknown role, a
@@ -182,8 +351,20 @@ is built.
 node --test "access/test/*.test.js"
 ```
 
-49 tests, no dependencies. The interesting ones are the denials — forged
+123 tests, no dependencies. The interesting ones are the denials — forged
 signature, `alg: none`, wrong audience, wrong team, expired, unprovisioned
-email, unreachable key endpoint — since those are what protect the pilot. The
-benchmark suite adds the negative property: whatever the cohort looks like, the
-response carries no peer list and neither extreme.
+email, unreachable key endpoint, a CCN from another organization, a decision
+verified by id rather than by hospital — since those are what protect the pilot.
+
+Three negative properties are asserted rather than described:
+
+- whatever the cohort looks like, a benchmark response carries no peer list and
+  neither extreme;
+- a state ranking serialized for a customer contains no other hospital's CCN and
+  no other hospital's name;
+- after the server patch, no route taking a `?ccn=` is left unchecked, and the
+  patched file still parses.
+
+The last one matters because a string-replacing patcher's characteristic failure
+is a syntax error, and `pm2` will restart a broken server sixteen times before
+giving up quietly.

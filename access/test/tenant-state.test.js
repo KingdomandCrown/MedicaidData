@@ -15,7 +15,10 @@ const { TenantState } = require(path.join(__dirname, "..", "tenant-state.js"));
 
 const DEFAULTS = () => ({ uploadedDoc: null, lastEnvelope: null, lastAgentId: "general" });
 
-const req = (email, orgId) => ({ user: { sub: email, email, orgId } });
+// The shape the access guard actually attaches. Written as `req.user` first,
+// which is the shape nothing in this codebase produces — the two files only
+// met when the server was wired, and every request threw.
+const req = (email, org) => ({ minerva: { email, org, role: "org_member" } });
 
 const pratt = req("cfo@prattregional.org", "pratt");
 const stfrancis = req("cfo@stfrancis.org", "stfrancis");
@@ -72,13 +75,34 @@ test("each caller starts from a fresh copy of the defaults", () => {
 test("a request with no user is refused rather than given shared state", () => {
   const tenants = new TenantState({ defaults: DEFAULTS });
   assert.throws(() => tenants.for({}), /authenticated/);
+  assert.throws(() => tenants.for({ minerva: {} }), /authenticated/);
   assert.throws(() => tenants.for({ user: {} }), /authenticated/);
   assert.throws(() => tenants.for(null), /authenticated/);
 });
 
 test("email alone identifies a caller when there is no subject claim", () => {
   const tenants = new TenantState({ defaults: DEFAULTS });
-  assert.equal(tenants.keyFor({ user: { email: "a@b.org" } }), "a@b.org");
+  assert.equal(tenants.keyFor({ minerva: { email: "a@b.org" } }), "a@b.org");
+});
+
+test("the identity the access guard attaches is the one this reads", () => {
+  // The guard sets req.minerva and never req.user. Reading the wrong property
+  // does not fail quietly here — keyFor throws — but it throws on every single
+  // request, which is a server that does not start working rather than a
+  // server that leaks. Assert the shapes are actually connected.
+  const tenants = new TenantState({ defaults: DEFAULTS });
+  const fromGuard = { minerva: { email: "cfo@prattregional.org", org: "pratt", role: "org_admin" } };
+
+  assert.equal(tenants.keyFor(fromGuard), "cfo@prattregional.org");
+  tenants.for(fromGuard).lastAgentId = "cfo";
+  assert.equal(tenants.clearOrg("pratt"), 1);
+});
+
+test("a generic req.user is still accepted, so the older shape keeps working", () => {
+  const tenants = new TenantState({ defaults: DEFAULTS });
+  assert.equal(tenants.keyFor({ user: { sub: "a@b.org", orgId: "pratt" } }), "a@b.org");
+  tenants.for({ user: { sub: "a@b.org", orgId: "pratt" } });
+  assert.equal(tenants.clearOrg("pratt"), 1);
 });
 
 // --- forgetting -----------------------------------------------------------

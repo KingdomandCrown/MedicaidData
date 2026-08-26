@@ -136,7 +136,7 @@ fi
 
 head2 "Modules"
 DEST="$APP/access"
-for f in access-control.js benchmark.js directory.example.json README.md; do
+for f in access-control.js benchmark.js scope.js tenant-state.js boot.js patch-minerva-server.js directory.example.json orgs.example.json README.md; do
   if [ ! -f "$SRC/$f" ]; then
     echo "ERROR: missing $SRC/$f — run this from the access/ directory of the repo" >&2
     exit 2
@@ -151,7 +151,7 @@ if [ "$APPLY" = "yes" ]; then
     ok "backed up existing access/ to $(basename "$BACKUP")"
   fi
   mkdir -p "$DEST"
-  cp "$SRC/access-control.js" "$SRC/benchmark.js" "$SRC/directory.example.json" "$SRC/README.md" "$DEST/"
+  cp "$SRC/access-control.js" "$SRC/benchmark.js" "$SRC/scope.js" "$SRC/tenant-state.js" "$SRC/boot.js" "$SRC/patch-minerva-server.js" "$SRC/directory.example.json" "$SRC/orgs.example.json" "$SRC/README.md" "$DEST/"
   ok "copied modules to $DEST"
 
   if [ -f "$DEST/directory.json" ]; then
@@ -161,13 +161,20 @@ if [ "$APPLY" = "yes" ]; then
     warn "created directory.json from the example — EDIT IT before letting anyone in"
   fi
 
+  if [ -f "$DEST/orgs.json" ]; then
+    ok "orgs.json already present — left untouched"
+  else
+    cp "$SRC/orgs.example.json" "$DEST/orgs.json"
+    warn "created orgs.json from the example — it currently grants one hospital"
+  fi
+
   # Rollback that knows what this run did.
   ROLLBACK="$APP/rollback-access-$STAMP.sh"
   {
     echo "#!/usr/bin/env bash"
     echo "# Undo the access-control install of $STAMP."
     echo "set -u"
-    echo "rm -f '$DEST/access-control.js' '$DEST/benchmark.js' '$DEST/directory.example.json' '$DEST/README.md'"
+    echo "rm -f '$DEST/access-control.js' '$DEST/benchmark.js' '$DEST/scope.js' '$DEST/tenant-state.js' '$DEST/boot.js' '$DEST/patch-minerva-server.js' '$DEST/directory.example.json' '$DEST/orgs.example.json' '$DEST/README.md'"
     if [ -n "$BACKUP" ]; then
       echo "cp -R '$BACKUP/.' '$DEST/'"
       echo "echo 'restored access/ from $(basename "$BACKUP")'"
@@ -179,33 +186,43 @@ if [ "$APPLY" = "yes" ]; then
   chmod +x "$ROLLBACK"
   ok "wrote $(basename "$ROLLBACK")"
 else
-  say "  would copy access-control.js, benchmark.js, directory.example.json, README.md"
-  say "  would create access/directory.json if absent"
+  say "  would copy access-control.js, benchmark.js, scope.js, tenant-state.js, boot.js, patch-minerva-server.js, directory.example.json, orgs.example.json, README.md"
+  say "  would create access/directory.json and access/orgs.json if absent"
   say "  would write a matching rollback script"
 fi
 
 # --- 6. what to wire in ----------------------------------------------------
 
-head2 "Add to ${ENTRY:-your server file}"
+head2 "Wiring it into the server"
 cat <<'SNIPPET'
-    const { createAccessGuard, orgFilter, requireRole, ROLES } =
-      require("./access/access-control");
+  The modules are copied but nothing calls them yet. For minerva-4.0/server.js
+  that last step is scripted, because the file is known:
 
-    app.use(createAccessGuard({
-      teamDomain: process.env.ACCESS_TEAM_DOMAIN,
-      aud: process.env.ACCESS_AUD,
-      directory: require("./access/directory.json"),
-      onAudit: (e) => console.log("[access]", JSON.stringify(e)),
-    }));
+      node access/patch-minerva-server.js                    # report only
+      node access/patch-minerva-server.js --apply            # write it
 
-  Then, in every handler that reads data:
+  It makes 23 edits, backs the file up first, refuses to write if any anchor
+  has moved, and is safe to run twice.
 
-    const org = orgFilter(req);   // never req.query.org / req.body.org
+  For any other server, three lines near the top:
+
+      const { bootAccess } = require("./access/boot");
+      const access = bootAccess({ appDir: __dirname });
+      app.use("/api", access.guard);
+
+  then in every handler that takes a hospital:
+
+      access.scope.assertCcn(req, req.query.ccn);
+
+  and one line after the last route:
+
+      app.use(access.accessErrorHandler);
 SNIPPET
 
 say ""
-say "This installer does not edit your server file. Send me ${ENTRY:-the entry file}"
-say "and I will give you the exact diff for it."
+say "Then restart, and check the two things that decide whether any of it holds:"
+say "  curl -s localhost:3000/health          should report access: cloudflare-access"
+say "  curl -s <lan-ip>:3000/health           should not answer at all"
 say ""
 if [ "$APPLY" != "yes" ]; then
   say "Nothing was changed. Re-run with --apply when the checks above look right."
