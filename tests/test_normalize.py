@@ -94,3 +94,59 @@ def test_state_falls_back_to_ccn_when_column_missing():
     raw = {"PRVDR_NUM": "170012", "PRVDR_CTGRY_CD": "01", "PGM_TRMNTN_CD": "00"}
     rec = normalize.normalize_record(raw)
     assert rec.state == "KS"
+
+
+# --- values that are corruption, not data ---------------------------------
+
+
+def test_a_nul_byte_is_removed_rather_than_passed_to_the_database():
+    """Kenmore Mercy's file killed an entire hospital's load on one field.
+
+    SQLite refuses a string containing a NUL, and ``\\s+`` does not match one,
+    so it passed every filter here and failed at the insert — taking 200,000
+    good rows with it.
+    """
+
+    from hospitals.normalize import clean_str
+
+    assert clean_str("ok\x00\x00 value") == "ok value"
+    assert clean_str("\x00" * 100) is None
+
+
+def test_other_non_whitespace_control_characters_go_too():
+    from hospitals.normalize import clean_str
+
+    assert clean_str("a\x01b\x1fc") == "abc"
+    assert clean_str("bell\x07") == "bell"
+
+
+def test_real_whitespace_still_collapses_to_a_single_space():
+    from hospitals.normalize import clean_str
+
+    assert clean_str("a\tb\nc  d") == "a b c d"
+
+
+def test_an_absurdly_long_value_is_truncated_not_rejected():
+    """8,373,361,135 characters is corruption; losing its tail costs nothing."""
+
+    from hospitals.normalize import MAX_FIELD_CHARS, clean_str
+
+    result = clean_str("x" * (MAX_FIELD_CHARS + 5_000))
+    assert len(result) == MAX_FIELD_CHARS
+
+
+def test_a_long_but_plausible_value_is_left_alone():
+    from hospitals.normalize import clean_str
+
+    # CMS attestation text runs to a few thousand characters and is real data.
+    attestation = "To the best of its knowledge and belief, " * 50
+    assert clean_str(attestation) == attestation.strip()
+
+
+def test_ordinary_values_are_unchanged():
+    from hospitals.normalize import clean_str
+
+    assert clean_str("PRATT REGIONAL MEDICAL CENTER") == "PRATT REGIONAL MEDICAL CENTER"
+    assert clean_str(None) is None
+    assert clean_str("") is None
+    assert clean_str("   ") is None

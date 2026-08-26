@@ -16,7 +16,10 @@ import datetime as dt
 import re
 from dataclasses import asdict, dataclass
 
+from .logging_config import get_logger
 from .states import State, state_for_ssa_code
+
+log = get_logger(__name__)
 
 # --- Raw POS column names -------------------------------------------------
 
@@ -110,12 +113,42 @@ class HospitalRecord:
 # --- Field-level normalizers ---------------------------------------------
 
 
+# Control characters that are not whitespace. SQLite refuses a string
+# containing a NUL, and ``\s+`` does not match one, so they pass every filter
+# here and fail at the insert.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+# No legitimate field in a charge file is longer than this. Kenmore Mercy's
+# file carried a single value of 8,373,361,135 characters -- 8.3 GB of NUL
+# bytes from a corrupt region -- which killed the load of an entire hospital
+# at the point of insert. Truncating loses nothing real and costs one row's
+# tail rather than 200,000 rows.
+MAX_FIELD_CHARS = 20_000
+
+
 def clean_str(value) -> str | None:
-    """Trim, collapse internal whitespace, and null out empties."""
+    """Trim, collapse internal whitespace, and null out empties.
+
+    Also removes non-whitespace control characters and truncates a value long
+    enough to be corruption rather than data. Both exist because one hospital's
+    file contained a field of NUL bytes: every check here passed it through,
+    and SQLite then refused the whole batch.
+    """
 
     if value is None:
         return None
-    text = re.sub(r"\s+", " ", str(value)).strip()
+    text = str(value)
+    if _CONTROL_CHARS.search(text):
+        text = _CONTROL_CHARS.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > MAX_FIELD_CHARS:
+        log.warning(
+            "Truncating a %d-character field to %d; a value this long is "
+            "corruption, not data",
+            len(text),
+            MAX_FIELD_CHARS,
+        )
+        text = text[:MAX_FIELD_CHARS].strip()
     return text or None
 
 
