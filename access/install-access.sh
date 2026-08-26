@@ -93,10 +93,16 @@ if [ -n "$ENTRY" ] && [ -f "$APP/$ENTRY" ]; then
   if [ -n "$LISTEN_LINE" ]; then
     say "  in $ENTRY:"
     printf '    %s\n' "$LISTEN_LINE"
-    if printf '%s' "$LISTEN_LINE" | grep -q "127.0.0.1\|localhost"; then
-      ok "bound to loopback — the tunnel is the only way in"
+    # The callback almost always logs "http://localhost:PORT". That is a message
+    # to a human, not a bind address, and matching it reported "bound to
+    # loopback" for a server listening on every interface — the one answer this
+    # check exists to never give. Cut the callback off before deciding.
+    LISTEN_ARGS="$(printf '%s' "$LISTEN_LINE" | sed 's/=>.*//; s/function[[:space:]]*(.*//')"
+    if printf '%s' "$LISTEN_ARGS" | grep -qE '127\.0\.0\.1|"localhost"|HOST'; then
+      ok "the listen call names a host — confirm it below against what is actually bound"
     else
-      bad "no loopback bind found. Change it to:  app.listen(PORT, \"127.0.0.1\")"
+      bad "no host argument. app.listen(PORT) listens on every interface."
+      say "        Fix:  node access/patch-minerva-server.js --apply"
     fi
   else
     warn "no .listen( call found in $ENTRY"
@@ -104,14 +110,17 @@ if [ -n "$ENTRY" ] && [ -f "$APP/$ENTRY" ]; then
 fi
 
 say ""
-say "  Ports currently listening on all interfaces:"
+say "  What is actually bound right now (this is the answer that counts —"
+say "  the source above is only what the file says):"
 if command -v lsof >/dev/null 2>&1; then
-  EXPOSED="$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E '\*:(3000|4000)' || true)"
+  EXPOSED="$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E '\*:[0-9]+ \(LISTEN\)' || true)"
   if [ -n "$EXPOSED" ]; then
     printf '%s\n' "$EXPOSED" | sed 's/^/    /'
-    bad "the above are reachable from the network, not just the tunnel"
+    bad "every port above answers on every interface, so Cloudflare Access is optional"
+    say "        A running process keeps its old bind until it restarts:"
+    say "          pm2 restart minerva-40"
   else
-    ok "nothing on :3000 or :4000 is bound to all interfaces"
+    ok "nothing is listening on all interfaces"
   fi
 else
   warn "lsof not available; check by hand"
@@ -202,7 +211,18 @@ cat <<'SNIPPET'
       node access/patch-minerva-server.js --apply            # write it
 
   It makes 23 edits, backs the file up first, refuses to write if any anchor
-  has moved, and is safe to run twice.
+  has moved, and is safe to run twice. It also reports one optional fix that
+  is off unless you add --fix-export.
+
+  The server will refuse to start until ACCESS_TEAM_DOMAIN and ACCESS_AUD are
+  set. pm2 keeps the environment a process started with, so exporting them and
+  restarting is not enough on its own -- --update-env is what re-reads them,
+  and pm2 save is what survives a reboot:
+
+      export ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
+      export ACCESS_AUD=<the AUD tag from the Access dashboard>
+      pm2 restart minerva-40 --update-env
+      pm2 save
 
   For any other server, three lines near the top:
 

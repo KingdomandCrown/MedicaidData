@@ -338,6 +338,30 @@ const EDITS = [
   },
 
   {
+    id: "export-ollama-generate",
+    why:
+      "NOT an access-control fix, and off unless --fix-export is passed: " +
+      "/api/export calls ollamaGenerate(), which nothing defines, so every " +
+      "Export click returns \"Export failed: ollamaGenerate is not defined\".",
+    optional: "--fix-export",
+    // Never add a second definition. If some copy of this file defines it
+    // further down, redefining it here shadows working code with a guess.
+    skipIf: (text) =>
+      /(?:function\s+ollamaGenerate\b|(?:const|let|var)\s+ollamaGenerate\s*=)/.test(text),
+    find: 'app.post("/api/export", async (req, res) => {',
+    done: "async function ollamaGenerate(prompt, useSchema, model) {",
+    replace:
+      "// The non-streaming sibling of ollamaStream, which /api/export has always\n" +
+      "// called and this file has never defined. Same arguments, no callbacks:\n" +
+      "// export wants the finished text, not deltas.\n" +
+      "async function ollamaGenerate(prompt, useSchema, model) {\n" +
+      "  return ollamaStream(prompt, useSchema, null, null, model);\n" +
+      "}\n" +
+      "\n" +
+      'app.post("/api/export", async (req, res) => {',
+  },
+
+  {
     id: "listen-loopback",
     why:
       "Access protects the hostname, not the port. Bound to every interface, " +
@@ -373,9 +397,19 @@ function countOccurrences(text, find) {
   return n;
 }
 
-function applyOne(text, edit) {
+function applyOne(text, edit, opts = {}) {
   const expected = edit.count || 1;
 
+  // Order matters. "You did not ask for this" and "this file does not need it"
+  // are both true before "it is already applied" can be, and reporting the
+  // wrong one of the three sends someone looking for a problem that is not
+  // there.
+  if (edit.optional && !(opts.enable || []).includes(edit.optional)) {
+    return { status: "off", text };
+  }
+  if (typeof edit.skipIf === "function" && edit.skipIf(text)) {
+    return { status: "unneeded", text };
+  }
   if (edit.done && text.includes(edit.done)) {
     return { status: "already", text };
   }
@@ -394,11 +428,11 @@ function applyOne(text, edit) {
   return { status: "applied", text: next };
 }
 
-function applyAll(source) {
+function applyAll(source, opts = {}) {
   let text = source;
   const results = [];
   for (const edit of EDITS) {
-    const out = applyOne(text, edit);
+    const out = applyOne(text, edit, opts);
     text = out.text;
     results.push({ id: edit.id, why: edit.why, status: out.status, found: out.found, expected: out.expected });
   }
@@ -432,14 +466,18 @@ function main(argv) {
     return 1;
   }
 
+  const enable = argv.filter((a) => a.startsWith("--fix-"));
   const source = fs.readFileSync(serverPath, "utf8");
-  const { text, results } = applyAll(source);
+  const { text, results } = applyAll(source, { enable });
 
   const width = Math.max(...results.map((r) => r.id.length));
   let missing = 0;
   let changed = 0;
   for (const r of results) {
-    const mark = { applied: "  ok  ", already: " done ", missing: " MISS ", ambiguous: " AMBIG" }[r.status];
+    const mark = {
+      applied: "  ok  ", already: " done ", missing: " MISS ",
+      ambiguous: " AMBIG", off: " off  ", unneeded: " n/a  ",
+    }[r.status];
     console.log(`[${mark}] ${r.id.padEnd(width)}  ${r.why}`);
     if (r.status === "missing") missing += 1;
     if (r.status === "ambiguous") {
@@ -449,12 +487,18 @@ function main(argv) {
     if (r.status === "applied") changed += 1;
   }
 
-  const gen = checkOllamaGenerate(source);
-  if (gen.called && !gen.defined) {
+  const off = results.filter((r) => r.status === "off");
+  if (off.length) {
+    const gen = checkOllamaGenerate(source);
     console.log("");
-    console.log("Separately, and not patched here: /api/export calls ollamaGenerate(),");
-    console.log("which nothing in this file defines. Every Export click returns");
-    console.log('"Export failed: ollamaGenerate is not defined". Worth a look.');
+    console.log(`${off.length} optional fix(es) are off. To include them:`);
+    for (const r of off) {
+      const edit = EDITS.find((e) => e.id === r.id);
+      console.log(`  ${edit.optional}   ${r.id}`);
+    }
+    if (gen.called && !gen.defined) {
+      console.log("  (confirmed on this file: ollamaGenerate is called and never defined)");
+    }
   }
 
   console.log("");

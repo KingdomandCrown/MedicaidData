@@ -25,18 +25,23 @@ const source = fs.readFileSync(FIXTURE, "utf8");
 
 // --- every anchor matches -------------------------------------------------
 
+const ALL = { enable: ["--fix-export"] };
+
 test("every edit finds its anchor in the shipped server", () => {
-  const { results } = applyAll(source);
-  const failed = results.filter((r) => r.status !== "applied");
+  const { results } = applyAll(source, ALL);
+  const failed = results.filter((r) => !["applied", "unneeded"].includes(r.status));
   assert.deepEqual(failed.map((r) => `${r.id}:${r.status}`), []);
 });
 
 test("the patch is idempotent", () => {
-  const once = applyAll(source);
-  const twice = applyAll(once.text);
+  const once = applyAll(source, ALL);
+  const twice = applyAll(once.text, ALL);
 
   assert.equal(twice.text, once.text);
-  assert.deepEqual([...new Set(twice.results.map((r) => r.status))], ["already"]);
+  assert.deepEqual(
+    [...new Set(twice.results.map((r) => r.status))].sort(),
+    ["already", "unneeded"],
+  );
 });
 
 test("the result is still valid JavaScript", () => {
@@ -115,6 +120,36 @@ test("the internal model bake-off is closed to customers", () => {
   const { text } = applyAll(source);
   assert.match(text, /app\.post\("\/api\/bakeoff-one", requireMinervaAdmin,/);
   assert.match(text, /app\.post\("\/api\/bakeoff", requireMinervaAdmin,/);
+});
+
+// --- the unrelated fix stays opt-in ---------------------------------------
+
+test("an unrelated fix is off unless it is asked for", () => {
+  // A security patch that quietly carries a functional change is a patch nobody
+  // can review as either one.
+  const row = applyAll(source).results.find((r) => r.id === "export-ollama-generate");
+  assert.equal(row.status, "off");
+});
+
+test("a definition that already exists is not shadowed by a second one", () => {
+  // The fixture defines ollamaGenerate. Adding another would replace working
+  // code with a guess at what it does.
+  const row = applyAll(source, ALL).results.find((r) => r.id === "export-ollama-generate");
+  assert.equal(row.status, "unneeded");
+  assert.equal((applyAll(source, ALL).text.match(/async function ollamaGenerate/g) || []).length, 1);
+});
+
+test("where the definition is genuinely missing, it is added and still parses", () => {
+  const broken = source.replace(
+    'async function ollamaGenerate(prompt, useSchema, model) { return ""; }\n',
+    "",
+  );
+  assert.equal(/function ollamaGenerate/.test(broken), false, "fixture edit did not take");
+
+  const { text, results } = applyAll(broken, ALL);
+  assert.equal(results.find((r) => r.id === "export-ollama-generate").status, "applied");
+  assert.match(text, /return ollamaStream\(prompt, useSchema, null, null, model\);/);
+  assert.doesNotThrow(() => new vm.Script(text, { filename: "patched.js" }));
 });
 
 // --- a file that has drifted is reported, not mangled ----------------------

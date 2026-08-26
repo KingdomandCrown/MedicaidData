@@ -53,6 +53,19 @@ and is safe to run twice. `access/test/patch-minerva-server.test.js` checks that
 every anchor matches, that the result still parses, and that no route taking a
 `?ccn=` is left unchecked.
 
+One more edit is off unless asked for. `/api/export` calls `ollamaGenerate()`,
+which nothing in `server.js` defines, so every Export click returns *"Export
+failed: ollamaGenerate is not defined"*. That is a real bug and not an
+access-control one, and a security patch carrying a silent functional change is
+a patch nobody can review as either:
+
+```bash
+node access/patch-minerva-server.js --apply --fix-export
+```
+
+It adds the missing non-streaming wrapper, and skips itself entirely if a
+definition turns out to exist.
+
 For anything else, three lines near the top:
 
 ```js
