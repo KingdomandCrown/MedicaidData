@@ -162,6 +162,21 @@ class KeyCache {
  * signature: without it a token minted for a *different* Access application in
  * the same team would sail through.
  */
+/**
+ * The `iss` claim of a token whose signature has NOT been checked.
+ *
+ * For error messages only. Anything read here is attacker-controlled, so it may
+ * never reach a decision — and it does not: the sole caller is already throwing.
+ */
+function peekIssuer(payloadB64) {
+  try {
+    const payload = decodeJsonSegment(payloadB64, "payload");
+    return typeof payload.iss === "string" ? payload.iss : null;
+  } catch {
+    return null;
+  }
+}
+
 async function verifyAccessToken(token, { keys, teamDomain, aud, now = Date.now, clockSkewSec = 60 }) {
   if (typeof token !== "string" || token.split(".").length !== 3) {
     throw unauthenticated("malformed_token", "expected a three-part JWT");
@@ -175,7 +190,32 @@ async function verifyAccessToken(token, { keys, teamDomain, aud, now = Date.now,
   }
   if (!header.kid) throw unauthenticated("malformed_token", "token header has no kid");
 
-  const key = await keys.get(header.kid);
+  // The signature has to be checked before any claim is trusted, so the key
+  // lookup necessarily comes first. That means a wrong ACCESS_TEAM_DOMAIN fails
+  // here, as "unknown_key" — we fetched one team's public keys and were handed
+  // a token signed by another's. The message names nothing, and the real cause
+  // is two lines of configuration away.
+  //
+  // So on that one failure, read the issuer out of the *unverified* payload to
+  // say which two domains disagree. It decides nothing — the request is already
+  // denied, and the only use of the value is a string in an error.
+  let key;
+  try {
+    key = await keys.get(header.kid);
+  } catch (err) {
+    if (err && err.code === "unknown_key") {
+      const claimed = peekIssuer(payloadB64);
+      if (claimed && claimed !== `https://${teamDomain}`) {
+        throw unauthenticated(
+          "bad_issuer",
+          `token was issued by ${claimed}, but this app is configured for ` +
+          `https://${teamDomain} — check ACCESS_TEAM_DOMAIN`,
+        );
+      }
+    }
+    throw err;
+  }
+
   const signingInput = Buffer.from(`${headerB64}.${payloadB64}`, "utf8");
   const ok = crypto.verify(
     "RSA-SHA256",

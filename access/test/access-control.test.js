@@ -226,6 +226,56 @@ test("an unknown kid triggers one refresh, then denies", async () => {
   assert.equal(out.res.body.error, "unknown_key");
 });
 
+test("a wrong team domain says so, instead of blaming the key", async () => {
+  // The real failure this was written for: ACCESS_TEAM_DOMAIN pointed at
+  // minervaai.cloudflareaccess.com while Cloudflare was signing tokens as
+  // flat-lake-bf88.cloudflareaccess.com. We fetch one team's public keys and
+  // are handed a token signed by another's, so it fails at the key lookup —
+  // before the issuer check, which cannot run until the signature verifies.
+  //
+  // "unknown_key" sent someone hunting through key rotation for an hour. The
+  // answer was two lines of configuration, and the token was carrying it.
+  const g = guard({ fetchImpl: fakeFetch(jwks()) });
+  const foreign = sign(
+    claims({ iss: "https://flat-lake-bf88.cloudflareaccess.com" }),
+    { kid: "some-other-teams-key", key: other.privateKey },
+  );
+
+  const out = await run(g, withToken(foreign));
+
+  assert.equal(out.res.statusCode, 401);
+  assert.equal(out.res.body.error, "bad_issuer");
+  assert.match(out.res.body.message, /flat-lake-bf88\.cloudflareaccess\.com/);
+  assert.match(out.res.body.message, new RegExp(TEAM.replace(/\./g, "\\.")));
+  assert.match(out.res.body.message, /ACCESS_TEAM_DOMAIN/);
+});
+
+test("a genuinely rotated key still reports the key, not the domain", async () => {
+  // Same issuer, unknown kid — that really is a key problem, and mislabelling
+  // it as a configuration error would send the next person the wrong way.
+  const g = guard({ fetchImpl: fakeFetch(jwks()) });
+  const out = await run(g, withToken(sign(claims(), { kid: "rotated" })));
+
+  assert.equal(out.res.body.error, "unknown_key");
+});
+
+test("the unverified issuer is used for the message and nothing else", async () => {
+  // The claim read to build that error comes from a token whose signature has
+  // not been checked. A forged issuer must not turn a denial into anything but
+  // a denial.
+  const g = guard({ fetchImpl: fakeFetch(jwks()) });
+  const forged = sign(
+    claims({ iss: `https://${TEAM}.evil.example` }),
+    { kid: "attacker-key", key: other.privateKey },
+  );
+
+  const out = await run(g, withToken(forged));
+
+  assert.equal(out.passed, false);
+  assert.equal(out.res.statusCode, 401);
+  assert.equal(out.req.minerva, undefined);
+});
+
 test("a rotated key is picked up on refresh", async () => {
   let served = jwks();
   const fetchImpl = fakeFetch(() => served);
