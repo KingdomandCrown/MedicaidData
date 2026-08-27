@@ -145,7 +145,7 @@ fi
 
 head2 "Modules"
 DEST="$APP/access"
-for f in access-control.js benchmark.js scope.js tenant-state.js boot.js patch-minerva-server.js directory.example.json orgs.example.json README.md; do
+for f in access-control.js benchmark.js scope.js tenant-state.js boot.js patch-minerva-server.js preflight.js directory.example.json orgs.example.json README.md; do
   if [ ! -f "$SRC/$f" ]; then
     echo "ERROR: missing $SRC/$f — run this from the access/ directory of the repo" >&2
     exit 2
@@ -160,7 +160,7 @@ if [ "$APPLY" = "yes" ]; then
     ok "backed up existing access/ to $(basename "$BACKUP")"
   fi
   mkdir -p "$DEST"
-  cp "$SRC/access-control.js" "$SRC/benchmark.js" "$SRC/scope.js" "$SRC/tenant-state.js" "$SRC/boot.js" "$SRC/patch-minerva-server.js" "$SRC/directory.example.json" "$SRC/orgs.example.json" "$SRC/README.md" "$DEST/"
+  cp "$SRC/access-control.js" "$SRC/benchmark.js" "$SRC/scope.js" "$SRC/tenant-state.js" "$SRC/boot.js" "$SRC/patch-minerva-server.js" "$SRC/preflight.js" "$SRC/directory.example.json" "$SRC/orgs.example.json" "$SRC/README.md" "$DEST/"
   ok "copied modules to $DEST"
 
   if [ -f "$DEST/directory.json" ]; then
@@ -183,7 +183,7 @@ if [ "$APPLY" = "yes" ]; then
     echo "#!/usr/bin/env bash"
     echo "# Undo the access-control install of $STAMP."
     echo "set -u"
-    echo "rm -f '$DEST/access-control.js' '$DEST/benchmark.js' '$DEST/scope.js' '$DEST/tenant-state.js' '$DEST/boot.js' '$DEST/patch-minerva-server.js' '$DEST/directory.example.json' '$DEST/orgs.example.json' '$DEST/README.md'"
+    echo "rm -f '$DEST/access-control.js' '$DEST/benchmark.js' '$DEST/scope.js' '$DEST/tenant-state.js' '$DEST/boot.js' '$DEST/patch-minerva-server.js' '$DEST/preflight.js' '$DEST/directory.example.json' '$DEST/orgs.example.json' '$DEST/README.md'"
     if [ -n "$BACKUP" ]; then
       echo "cp -R '$BACKUP/.' '$DEST/'"
       echo "echo 'restored access/ from $(basename "$BACKUP")'"
@@ -195,7 +195,7 @@ if [ "$APPLY" = "yes" ]; then
   chmod +x "$ROLLBACK"
   ok "wrote $(basename "$ROLLBACK")"
 else
-  say "  would copy access-control.js, benchmark.js, scope.js, tenant-state.js, boot.js, patch-minerva-server.js, directory.example.json, orgs.example.json, README.md"
+  say "  would copy access-control.js, benchmark.js, scope.js, tenant-state.js, boot.js, patch-minerva-server.js, preflight.js, directory.example.json, orgs.example.json, README.md"
   say "  would create access/directory.json and access/orgs.json if absent"
   say "  would write a matching rollback script"
 fi

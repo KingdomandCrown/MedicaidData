@@ -346,8 +346,33 @@ cp access/orgs.example.json access/orgs.json
 ```
 
 One says who works for whom, the other says which hospitals they may read.
-Neither is optional: a user in `directory.json` whose org is absent from
-`orgs.json` signs in successfully and sees nothing.
+They only mean anything together, and every way of getting them wrong looks
+fine in an editor — so check what they actually grant before restarting:
+
+```bash
+node access/preflight.js --app ~/minerva-4.0
+```
+
+```
+email                      role            sees
+-------------------------  --------------  ----
+cfo@prattregional.org      org_admin       1 hospital: 170027
+jeff@minervaai.health      minerva_admin   every hospital
+cfo@hutchinson.org         org_admin       NOTHING
+
+  PROBLEM  cfo@hutchinson.org: org "hutchinson" has no entry in orgs.json
+```
+
+None of those are syntax errors. A user whose org is missing from `orgs.json`
+signs in successfully and sees an empty picker with nothing logged anywhere; an
+org with hospitals and no staff is a customer who cannot log in; and a directory
+with no `minerva_admin` locks you out of your own product. Each one shows up as
+a person who cannot use the thing, on the morning of the demo.
+
+The one thing it cannot check is Cloudflare's own list. An address here that
+Access does not admit never arrives; an address Access admits that is missing
+here gets `403 not_provisioned`. After a failed sign-in, the exact address
+Access asserted is the last line of `access-audit.log`.
 
 ## The directory
 
