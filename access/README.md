@@ -53,6 +53,35 @@ and is safe to run twice. `access/test/patch-minerva-server.test.js` checks that
 every anchor matches, that the result still parses, and that no route taking a
 `?ccn=` is left unchecked.
 
+### Cloudflare only
+
+If you would rather let Cloudflare Access be the whole of it — one allowlist,
+one place to manage it, no `directory.json` and no `orgs.json` — that is a
+coherent choice, and while there is one customer it is the right one. Access
+answers *who gets in*, which is the entire question until a second organization
+has a login.
+
+```bash
+node access/patch-minerva-server.js --apply --hardening-only
+```
+
+Two edits, no modules, no configuration, nothing to keep in sync:
+
+- **`app.listen(PORT)` → `app.listen(PORT, HOST)`.** This one is not optional
+  under any policy. Access protects a *hostname*; the origin port is a separate
+  door. Bound to every interface, anyone who can reach the machine on that port
+  skips Cloudflare entirely — so without this, "managed through Cloudflare"
+  isn't true.
+- **`/health` stops publishing the last uploaded document's filename** to
+  anyone who asks, authenticated or not.
+
+What you give up is the second question. Once a Pratt login exists, that user
+can change six digits in `?ccn=` and read any of the other 6,174 hospitals —
+their margin, quality scores, 340B position, negotiated rates. Cloudflare has
+no view into that; it is one API call inside a session it already approved.
+
+Run the full patch before the first customer signs in, not after.
+
 One more edit is off unless asked for. `/api/export` calls `ollamaGenerate()`,
 which nothing in `server.js` defines, so every Export click returns *"Export
 failed: ollamaGenerate is not defined"*. That is a real bug and not an

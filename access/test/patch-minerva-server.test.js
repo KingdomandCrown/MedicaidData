@@ -29,7 +29,8 @@ const ALL = { enable: ["--fix-export"] };
 
 test("every edit finds its anchor in the shipped server", () => {
   const { results } = applyAll(source, ALL);
-  const failed = results.filter((r) => !["applied", "unneeded"].includes(r.status));
+  // "skip" is an edit belonging to the other mode, not a failure to match.
+  const failed = results.filter((r) => !["applied", "unneeded", "skip"].includes(r.status));
   assert.deepEqual(failed.map((r) => `${r.id}:${r.status}`), []);
 });
 
@@ -40,7 +41,7 @@ test("the patch is idempotent", () => {
   assert.equal(twice.text, once.text);
   assert.deepEqual(
     [...new Set(twice.results.map((r) => r.status))].sort(),
-    ["already", "unneeded"],
+    ["already", "skip", "unneeded"],
   );
 });
 
@@ -201,4 +202,52 @@ test("a call with no definition is detected", () => {
     checkOllamaGenerate("async function ollamaGenerate(p) {}\nollamaGenerate(1);"),
     { called: true, defined: true },
   );
+});
+
+// --- hardening without the access control ---------------------------------
+
+const HARD = { mode: "hardening", enable: ["--fix-export"] };
+
+test("hardening-only applies the fixes that are not about tenancy", () => {
+  const { results } = applyAll(source, HARD);
+  const applied = results.filter((r) => r.status === "applied").map((r) => r.id);
+
+  assert.deepEqual(applied.sort(), ["health-hardening", "listen-loopback"]);
+});
+
+test("hardening-only leaves the server free of the access modules", () => {
+  // Cloudflare decides who gets in. If any of this survived, the server would
+  // require configuration that is deliberately not there and fail to start.
+  const { text } = applyAll(source, HARD);
+
+  assert.equal(text.includes("bootAccess"), false);
+  assert.equal(text.includes("scope.assertCcn"), false);
+  assert.equal(text.includes("tenants.for(req)"), false);
+  assert.equal(text.includes("access.guard"), false);
+  assert.doesNotThrow(() => new vm.Script(text, { filename: "hardened.js" }));
+});
+
+test("hardening-only still closes the origin and the health leak", () => {
+  const { text } = applyAll(source, HARD);
+
+  assert.match(text, /app\.listen\(PORT, HOST,/);
+  const at = text.indexOf('app.get("/health"');
+  assert.equal(text.slice(at, text.indexOf("}));", at)).includes("uploadedDoc"), false);
+});
+
+test("the two health edits never both apply", () => {
+  // They rewrite the same route. Whichever ran first would leave the other
+  // matching nothing, which reads as drift rather than as a mode.
+  for (const opts of [HARD, { mode: "access" }]) {
+    const applied = applyAll(source, opts).results
+      .filter((r) => r.status === "applied")
+      .map((r) => r.id)
+      .filter((id) => id.startsWith("health"));
+    assert.equal(applied.length, 1, `${opts.mode}: ${applied.join()}`);
+  }
+});
+
+test("hardening-only is idempotent too", () => {
+  const once = applyAll(source, HARD);
+  assert.equal(applyAll(once.text, HARD).text, once.text);
 });

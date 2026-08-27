@@ -324,6 +324,7 @@ const EDITS = [
 
   {
     id: "health",
+    groups: ["access"],
     why:
       "/health is unauthenticated so a monitor does not need a token, which is " +
       "why it must not report anything about a caller. It published the filename " +
@@ -338,7 +339,23 @@ const EDITS = [
   },
 
   {
+    id: "health-hardening",
+    groups: ["hardening"],
+    why:
+      "Same leak, without the access modules: /health is unauthenticated and " +
+      "reported the last uploaded document's filename to anyone who asked.",
+    find: /app\.get\("\/health", \(req, res\) => res\.json\(\{[\s\S]*?\}\)\);/,
+    done: "agents: AGENTS.length\n}));",
+    replace:
+      'app.get("/health", (req, res) => res.json({\n' +
+      '  status: "ok", version: "4.0.6", model: effectiveDefault(), models: AVAILABLE_MODELS.length,\n' +
+      "  agents: AGENTS.length\n" +
+      "}));",
+  },
+
+  {
     id: "export-ollama-generate",
+    groups: ["access", "hardening"],
     why:
       "NOT an access-control fix, and off unless --fix-export is passed: " +
       "/api/export calls ollamaGenerate(), which nothing defines, so every " +
@@ -363,6 +380,7 @@ const EDITS = [
 
   {
     id: "listen-loopback",
+    groups: ["access", "hardening"],
     why:
       "Access protects the hostname, not the port. Bound to every interface, " +
       "anyone who reaches the Mac mini on 3000 walks past Cloudflare and past " +
@@ -404,6 +422,10 @@ function applyOne(text, edit, opts = {}) {
   // are both true before "it is already applied" can be, and reporting the
   // wrong one of the three sends someone looking for a problem that is not
   // there.
+  const groups = edit.groups || ["access"];
+  if (!groups.includes(opts.mode || "access")) {
+    return { status: "skip", text };
+  }
   if (edit.optional && !(opts.enable || []).includes(edit.optional)) {
     return { status: "off", text };
   }
@@ -467,16 +489,24 @@ function main(argv) {
   }
 
   const enable = argv.filter((a) => a.startsWith("--fix-"));
+  const mode = argv.includes("--hardening-only") ? "hardening" : "access";
   const source = fs.readFileSync(serverPath, "utf8");
-  const { text, results } = applyAll(source, { enable });
+  const { text, results } = applyAll(source, { enable, mode });
 
-  const width = Math.max(...results.map((r) => r.id.length));
+  if (mode === "hardening") {
+    console.log("Hardening only. Cloudflare Access decides who gets in; nothing here");
+    console.log("decides which hospital they see once they are in.");
+    console.log("");
+  }
+
+  const shown = results.filter((r) => r.status !== "skip");
+  const width = Math.max(...shown.map((r) => r.id.length));
   let missing = 0;
   let changed = 0;
-  for (const r of results) {
+  for (const r of results.filter((r) => r.status !== "skip")) {
     const mark = {
       applied: "  ok  ", already: " done ", missing: " MISS ",
-      ambiguous: " AMBIG", off: " off  ", unneeded: " n/a  ",
+      ambiguous: " AMBIG", off: " off  ", unneeded: " n/a  ", skip: "      ",
     }[r.status];
     console.log(`[${mark}] ${r.id.padEnd(width)}  ${r.why}`);
     if (r.status === "missing") missing += 1;
@@ -526,6 +556,11 @@ function main(argv) {
   console.log(`Applied ${changed} edit(s).`);
   console.log(`Backup: ${backup}`);
   console.log("");
+  if (mode === "hardening") {
+    console.log("Nothing else to configure. Restart and you are done:");
+    console.log("  pm2 restart minerva-40");
+    return 0;
+  }
   console.log("Before restarting, make sure these exist and are filled in:");
   console.log("  <app>/access/directory.json   who works for which organization");
   console.log("  <app>/access/orgs.json        which hospitals each organization may read");
