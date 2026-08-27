@@ -381,7 +381,7 @@ const EDITS = [
 
   {
     id: "listen-loopback",
-    groups: ["access", "hardening"],
+    groups: ["access"],
     why:
       "Access protects the hostname, not the port. Bound to every interface, " +
       "anyone who reaches the Mac mini on 3000 walks past Cloudflare and past " +
@@ -395,6 +395,24 @@ const EDITS = [
       "app.use(access.accessErrorHandler);\n" +
       "\n" +
       "const PORT = process.env.PORT || 3000;\n" +
+      'const HOST = process.env.MINERVA_HOST || "127.0.0.1";\n' +
+      "app.listen(PORT, HOST, () => console.log(",
+  },
+
+  {
+    id: "listen-loopback-hardening",
+    groups: ["hardening"],
+    why:
+      "The same loopback bind, with no error handler: hardening-only has no " +
+      "access object, and one shared edit that mentioned it crash-looped the " +
+      "server on ReferenceError at startup.",
+    find: /const PORT = process\.env\.PORT \|\| 3000;\napp\.listen\(PORT, \(\) => console\.log\(/,
+    done: 'const HOST = process.env.MINERVA_HOST || "127.0.0.1";',
+    replace:
+      "const PORT = process.env.PORT || 3000;\n" +
+      "// Cloudflare Access protects the hostname, not the port. Bound to every\n" +
+      "// interface, anyone who reaches this machine on this port skips Access\n" +
+      "// entirely. The tunnel connects to loopback, so this costs nothing.\n" +
       'const HOST = process.env.MINERVA_HOST || "127.0.0.1";\n' +
       "app.listen(PORT, HOST, () => console.log(",
   },

@@ -212,7 +212,50 @@ test("hardening-only applies the fixes that are not about tenancy", () => {
   const { results } = applyAll(source, HARD);
   const applied = results.filter((r) => r.status === "applied").map((r) => r.id);
 
-  assert.deepEqual(applied.sort(), ["health-hardening", "listen-loopback"]);
+  assert.deepEqual(applied.sort(), ["health-hardening", "listen-loopback-hardening"]);
+});
+
+test("hardening-only names nothing from the access modules at all", () => {
+  // The bug this exists for: listen-loopback was shared between both modes and
+  // its replacement carried `app.use(access.accessErrorHandler)`. In hardening
+  // mode there is no `access` object, so the patched server threw
+  // ReferenceError on startup and pm2 restarted it in a loop -- reported as
+  // "online", answering nothing.
+  //
+  // Asserting on the four names I happened to think of is what let it through.
+  // Assert on the prefix instead.
+  const { text } = applyAll(source, HARD);
+  const leaked = [...text.matchAll(/\baccess\.[a-zA-Z]+/g)].map((m) => m[0]);
+
+  assert.deepEqual([...new Set(leaked)], []);
+  assert.equal(/\bbootAccess\b|\bscope\.|\btenants\./.test(text), false);
+});
+
+test("nothing the patcher introduces is used without also being declared", () => {
+  // The general form of the bug: an edit in one mode names something only the
+  // other mode defines. A syntax check cannot see it -- `access.foo` parses
+  // fine when `access` is undefined; it throws at startup, and pm2 reports the
+  // crash loop as "online".
+  const INTRODUCED = {
+    access: "const access = bootAccess(",
+    scope: "const scope = access.scope;",
+    tenants: "const tenants = access.tenants;",
+    requireMinervaAdmin: "const requireMinervaAdmin =",
+    bootAccess: 'require("./access/boot")',
+  };
+
+  for (const opts of [HARD, ALL]) {
+    const { text } = applyAll(source, opts);
+    for (const [name, declaration] of Object.entries(INTRODUCED)) {
+      const used = new RegExp(`(?<![\\w.$])${name}\\s*[.(]`).test(text);
+      if (!used) continue;
+      assert.equal(
+        text.includes(declaration),
+        true,
+        `${opts.mode || "access"} mode uses ${name} without ${declaration}`,
+      );
+    }
+  }
 });
 
 test("hardening-only leaves the server free of the access modules", () => {
@@ -329,7 +372,7 @@ test("a reverted file takes the hardening patch cleanly", () => {
   // rather than applied — the real server.js is the one missing it.
   assert.deepEqual(
     results.filter((r) => r.status === "applied").map((r) => r.id).sort(),
-    ["health-hardening", "listen-loopback"],
+    ["health-hardening", "listen-loopback-hardening"],
   );
   assert.equal(text.includes("bootAccess"), false);
   assert.equal(text.includes("scope.assertCcn"), false);
