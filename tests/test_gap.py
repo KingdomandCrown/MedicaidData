@@ -233,6 +233,7 @@ def test_write_xlsx_has_every_sheet(engine, tmp_path):
         "Independents by State",
         "State Coverage",
         "Unattributed Files",
+        "Probably Already Held",
         "How to find a file",
     ]
 
@@ -381,3 +382,110 @@ def test_the_workbook_explains_the_cms_index_path(engine, tmp_path):
         if c.value
     )
     assert "cms-hpt.txt" in text
+
+
+# --- the file we already have -----------------------------------------------
+
+
+def _put(engine, hospital_rows=(), source_rows=()):
+    with engine.begin() as conn:
+        if hospital_rows:
+            conn.execute(insert(hospitals), list(hospital_rows))
+        if source_rows:
+            conn.execute(insert(charge_sources), list(source_rows))
+
+
+def test_a_held_file_is_offered_next_to_the_gap_it_resembles(engine):
+    """"Are we really missing Mercy?" turned out to mean four things at once.
+
+    Some Mercys were genuinely absent, some were covered under a sibling's EIN,
+    and some sat in the database unlinked because nothing could join on them.
+    Only the last is fixable without downloading anything, and it is invisible
+    in a list of gaps: the hospital looks missing, the file looks orphaned, and
+    nothing puts the two side by side.
+    """
+
+    _put(
+        engine,
+        [_hospital("351320", "Mercy Medical Center Williston", "ND")],
+        [_source("CNDMW_Mercy Medical Center - Williston_2025.07.01_CDM.xlsx",
+                 None, None, count=9702)],
+    )
+
+    report = build_gap_report(engine)
+    assert len(report.probable) == 1
+    assert report.probable[0].ccn == "351320"
+    assert report.probable[0].charge_count == 9702
+    assert report.probable[0].score >= 0.3
+
+
+def test_a_file_that_resembles_nothing_is_not_paired_with_anything(engine):
+    _put(
+        engine,
+        [_hospital("170027", "Pratt Regional Medical Center", "KS")],
+        [_source("99-9999999_totally-unrelated-clinic.json", "Unrelated Clinic", None,
+                 count=50)],
+    )
+
+    assert build_gap_report(engine).probable == []
+
+
+def test_the_filename_is_searched_as_well_as_the_name_inside(engine):
+    """A system file names the system in its metadata and the facility in its
+    filename, so matching on one alone finds neither."""
+
+    _put(
+        engine,
+        [_hospital("060112", "HCA HealthONE Sky Ridge", "CO")],
+        [_source("84-1321373_HCA-HEALTHONE-SKY-RIDGE_standardcharges.json",
+                 "HealthONE", None, count=3_026_183)],
+    )
+
+    assert build_gap_report(engine).probable[0].ccn == "060112"
+
+
+def test_a_covered_hospital_is_never_offered_a_second_file(engine):
+    _put(
+        engine,
+        [_hospital("351320", "Mercy Medical Center Williston", "ND")],
+        [
+            _source("linked.json", "Mercy Medical Center Williston", "ND",
+                    ccn="351320", count=100),
+            _source("orphan_mercy-medical-center-williston.xlsx", None, None, count=9702),
+        ],
+    )
+
+    assert build_gap_report(engine).probable == []
+
+
+def test_recoverable_rows_counts_each_file_once(engine):
+    """One orphan may resemble several gaps; its rows are not multiplied."""
+
+    _put(
+        engine,
+        [
+            _hospital("351320", "Mercy Medical Center Williston", "ND"),
+            _hospital("351321", "Mercy Medical Center Williston North", "ND"),
+        ],
+        [_source("mercy-medical-center-williston.xlsx", None, None, count=9702)],
+    )
+
+    report = build_gap_report(engine)
+    assert len(report.probable) == 2
+    assert report.recoverable_rows == 9702
+
+
+def test_the_biggest_recoverable_files_come_first(engine):
+    _put(
+        engine,
+        [
+            _hospital("351320", "Mercy Medical Center Williston", "ND"),
+            _hospital("060112", "HCA HealthONE Sky Ridge", "CO"),
+        ],
+        [
+            _source("mercy-medical-center-williston.xlsx", None, None, count=9702),
+            _source("hca-healthone-sky-ridge.json", None, None, count=3_026_183),
+        ],
+    )
+
+    assert build_gap_report(engine).probable[0].ccn == "060112"

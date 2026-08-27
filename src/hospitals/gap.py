@@ -29,6 +29,7 @@ from sqlalchemy.engine import Engine
 
 from .db import charge_sources, hospitals
 from .link import _state_of, normalize_name
+from .mrf_discovery import name_similarity, significant_tokens
 from .logging_config import get_logger
 
 log = get_logger(__name__)
@@ -135,6 +136,30 @@ class Unattributed:
 
 
 @dataclass
+class ProbableMatch:
+    """A hospital with no file, next to a file we hold that looks like its.
+
+    Reported because "we are missing Mercy" turned out to mean four different
+    things at once: some Mercys genuinely absent, some held under a sibling's
+    EIN, and some sitting in the database unlinked because nothing could join
+    on them. Only the last kind is fixable without downloading anything, and it
+    is invisible in a list of gaps — the hospital looks missing and the file
+    looks orphaned, and nothing puts the two side by side.
+
+    A suggestion, not a link. The score is shown so a person can judge it, and
+    ``link-charges`` still needs a real identifier to act on.
+    """
+
+    ccn: str
+    hospital: str
+    state: str | None
+    source_file: str
+    file_hospital_name: str | None
+    charge_count: int
+    score: float
+
+
+@dataclass
 class GapReport:
     systems: list[SystemGap]
     independents: list[HospitalGap]
@@ -142,10 +167,20 @@ class GapReport:
     unattributed: list[Unattributed]
     total_hospitals: int
     total_covered: int
+    probable: list[ProbableMatch] = field(default_factory=list)
 
     @property
     def total_remaining(self) -> int:
         return self.total_hospitals - self.total_covered
+
+    @property
+    def recoverable_rows(self) -> int:
+        """Charge rows sitting in files that probably belong to a known gap."""
+
+        seen: dict[str, int] = {}
+        for m in self.probable:
+            seen[m.source_file] = m.charge_count
+        return sum(seen.values())
 
     @property
     def uncrawled_states(self) -> list[str]:
@@ -219,6 +254,78 @@ def _covered_ccns(conn) -> tuple[set[str], dict[str, str], list[Unattributed]]:
 
     unattributed.sort(key=lambda u: -u.charge_count)
     return covered, publishing, unattributed
+
+
+#: How alike two names must be before a held file is offered as a suggestion.
+#: Lower than the crawler's threshold on purpose: this proposes nothing, it only
+#: puts two rows next to each other for a person to judge.
+MATCH_FLOOR = 0.3
+
+
+def probable_matches(
+    unattributed: list[Unattributed],
+    gaps: list[HospitalGap],
+    *,
+    floor: float = MATCH_FLOOR,
+    per_file: int = 3,
+) -> list[ProbableMatch]:
+    """Pair each file we cannot attribute with the gaps it most resembles.
+
+    Compared against both the name inside the file and the filename, because
+    the two disagree constantly: a system file names the system in its metadata
+    and the facility in its filename, which is how "Mercy Medical Center -
+    Williston" ends up looking like nothing at all.
+
+    Bucketed by first significant token so this stays linear-ish; comparing
+    every orphan against all 6,411 gaps would otherwise be minutes of work to
+    produce a list nobody waits for.
+    """
+
+    by_token: dict[str, list[HospitalGap]] = defaultdict(list)
+    for gap in gaps:
+        for token in significant_tokens(gap.name):
+            by_token[token].append(gap)
+
+    matches: list[ProbableMatch] = []
+    for source in unattributed:
+        haystacks = [source.hospital_name or "", _readable(source.source_file)]
+        candidates: dict[str, tuple[HospitalGap, float]] = {}
+        for haystack in haystacks:
+            for token in significant_tokens(haystack):
+                for gap in by_token.get(token, ()):
+                    score = max(
+                        name_similarity(haystack, gap.name),
+                        candidates.get(gap.ccn, (None, 0.0))[1],
+                    )
+                    if score >= floor:
+                        candidates[gap.ccn] = (gap, score)
+
+        best = sorted(candidates.values(), key=lambda pair: -pair[1])[:per_file]
+        for gap, score in best:
+            matches.append(
+                ProbableMatch(
+                    ccn=gap.ccn,
+                    hospital=gap.name,
+                    state=gap.state,
+                    source_file=source.source_file,
+                    file_hospital_name=source.hospital_name,
+                    charge_count=source.charge_count,
+                    score=round(score, 3),
+                )
+            )
+
+    matches.sort(key=lambda m: (-m.charge_count, -m.score))
+    return matches
+
+
+def _readable(source_file: str) -> str:
+    """A filename with its identifier block and punctuation turned into words."""
+
+    stem = str(source_file or "").rsplit("/", 1)[-1]
+    for suffix in (".json", ".csv", ".xlsx", ".xlsm", ".zip", ".gz"):
+        if stem.lower().endswith(suffix):
+            stem = stem[: -len(suffix)]
+    return stem.replace("_", " ").replace("-", " ")
 
 
 def build_gap_report(engine: Engine, *, min_system_size: int = 2) -> GapReport:
@@ -306,6 +413,7 @@ def build_gap_report(engine: Engine, *, min_system_size: int = 2) -> GapReport:
         unattributed=unattributed,
         total_hospitals=len(universe),
         total_covered=len(universe) - len(remaining),
+        probable=probable_matches(unattributed, remaining),
     )
     log.info(
         "Gap report: %d of %d hospitals covered; %d remaining "
@@ -328,6 +436,7 @@ _SHEETS = (
     "Independents by State",
     "State Coverage",
     "Unattributed Files",
+    "Probably Already Held",
 )
 
 
@@ -488,6 +597,31 @@ def write_xlsx(report: GapReport, path: str) -> str:
                 "",
             ]
             for u in report.unattributed
+        ],
+    )
+
+    sheet(
+        _SHEETS[4],
+        [
+            "CCN",
+            "Hospital with no file",
+            "State",
+            "Looks like this file we already hold",
+            "Name inside that file",
+            "Charge rows",
+            "Confidence",
+        ],
+        [
+            [
+                m.ccn,
+                m.hospital,
+                m.state or "",
+                m.source_file,
+                m.file_hospital_name or "",
+                m.charge_count,
+                m.score,
+            ]
+            for m in report.probable
         ],
     )
 

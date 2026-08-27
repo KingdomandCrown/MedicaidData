@@ -862,6 +862,17 @@ def _cmd_gap_report(args: argparse.Namespace) -> int:
             f"{len(report.unattributed)} file(s) held but not attributed to any "
             f"hospital ({rows} charge rows) — see the Unattributed Files sheet."
         )
+    if report.probable:
+        pairs = len({(m.ccn, m.source_file) for m in report.probable})
+        print(
+            f"\n{pairs} of those file(s) resemble a hospital on the worklist "
+            f"({report.recoverable_rows:,} charge rows) — see 'Probably Already "
+            "Held'.\nThat is coverage already on disk. Try this before "
+            "downloading anything:\n"
+            "  hospitals fetch-crosswalk --database-url <url>\n"
+            "  hospitals backfill-npis --apply --database-url <url>\n"
+            "  hospitals link-charges --database-url <url>"
+        )
     never = report.uncrawled_states
     if never:
         print(f"States with nothing ingested yet ({len(never)}): {', '.join(never)}")
