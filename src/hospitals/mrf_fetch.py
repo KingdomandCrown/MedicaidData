@@ -54,6 +54,39 @@ _TYPE_EXT = {
 
 _KNOWN_EXT = (".json", ".csv", ".xlsx", ".xlsm", ".xls", ".zip", ".gz", ".txt")
 
+#: What a file actually is, from its first bytes.
+#:
+#: Neither the URL nor the Content-Type can be trusted here. Lexington Regional
+#: publishes a ZIP archive at a ``.csv`` address, and the parser met it as
+#: "no recognizable data header in the first 8 rows" — a true statement about a
+#: compressed archive, and no help at all. The magic number is the only thing
+#: on the wire that cannot be a mistake.
+_MAGIC = (
+    (b"PK\x03\x04", ".zip"),
+    (b"PK\x05\x06", ".zip"),   # an empty archive
+    (b"\x1f\x8b", ".gz"),
+    (b"%PDF", ".pdf"),
+)
+
+
+def sniff_extension(head: bytes) -> str | None:
+    """The real format of a response, or None when the bytes do not say.
+
+    ``.html`` is returned for a page, which is not a format this pipeline wants
+    but is very much worth knowing: a hospital serving its 404 with a 200 would
+    otherwise be saved as a CSV and fail much later, somewhere less obvious.
+    """
+
+    for magic, ext in _MAGIC:
+        if head.startswith(magic):
+            return ext
+    text = head.lstrip(b"\xef\xbb\xbf").lstrip()
+    if text[:1] in (b"{", b"["):
+        return ".json"
+    if text[:1] == b"<":
+        return ".html"
+    return None
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -185,7 +218,30 @@ def fetch_one(
         log.warning("CCN %s: %s", ccn, result.note)
         return result
 
-    path = os.path.join(dest_dir, filename_for(ccn, name, url, content_type))
+    # Peek at the first chunk before choosing a name. The URL and the header
+    # are both claims; the magic number is what the file is.
+    chunks = iter(chunks)
+    head = b""
+    for chunk in chunks:
+        if chunk:
+            head = chunk
+            break
+
+    sniffed = sniff_extension(head[:512])
+    if sniffed == ".html":
+        result.status = "error"
+        result.note = "server returned an HTML page, not a data file"
+        log.warning("CCN %s: %s", ccn, result.note)
+        return result
+
+    named = filename_for(ccn, name, url, content_type)
+    if sniffed and not named.endswith(sniffed):
+        # `.json.gz` sniffs as `.gz`; the URL's more specific pair wins. A `.csv`
+        # that sniffs as `.zip` does not — there the URL is simply wrong.
+        stem = named[: named.rindex("_standardcharges")] + "_standardcharges"
+        named = stem + sniffed
+
+    path = os.path.join(dest_dir, named)
     result.path = path
 
     os.makedirs(dest_dir, exist_ok=True)
@@ -198,6 +254,11 @@ def fetch_one(
     written = 0
     try:
         with open(partial, "wb") as handle:
+            for chunk in ([head] if head else []) + [None]:
+                if chunk is None:
+                    break
+                written += len(chunk)
+                handle.write(chunk)
             for chunk in chunks:
                 if not chunk:
                     continue

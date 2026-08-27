@@ -283,3 +283,83 @@ def test_a_stale_scratch_file_is_not_mistaken_for_a_download(tmp_path):
 
     (tmp_path / "ccn-170027_pratt-regional-medical-center_standardcharges.json.999.part").write_bytes(b"x")
     assert existing_download(str(tmp_path), "170027", ROW["name"]) is None
+
+
+# --- what the file actually is ---------------------------------------------
+
+
+from hospitals.mrf_fetch import sniff_extension  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "head,expected",
+    [
+        (b"PK\x03\x04\x14\x00", ".zip"),
+        (b"PK\x05\x06\x00\x00", ".zip"),
+        (b"\x1f\x8b\x08\x00", ".gz"),
+        (b"%PDF-1.4", ".pdf"),
+        (b'{"hospital_name":', ".json"),
+        (b'  [\n  {"code"', ".json"),
+        (b"\xef\xbb\xbf{\"a\":1}", ".json"),
+        (b"<!DOCTYPE html>", ".html"),
+        (b"description,code|1,setting\n", None),
+        (b"", None),
+    ],
+)
+def test_the_first_bytes_say_what_a_file_is(head, expected):
+    assert sniff_extension(head) == expected
+
+
+def test_a_zip_served_at_a_csv_address_is_saved_as_a_zip(tmp_path):
+    """Lexington Regional publishes exactly this.
+
+    The parser met it as "no recognizable data header in the first 8 rows" —
+    a true statement about a compressed archive, and no help at all.
+    """
+
+    row = dict(ROW, mrf_url="https://x.org/456029692_lexington_standardcharges.csv")
+    result = fetch_one(
+        row, str(tmp_path), opener=_opener([b"PK\x03\x04rest of it"], "text/csv")
+    )
+
+    assert result.status == "ok"
+    assert result.path.endswith("_standardcharges.zip")
+    assert open(result.path, "rb").read() == b"PK\x03\x04rest of it"
+
+
+def test_a_more_specific_url_suffix_survives_the_sniff(tmp_path):
+    """`.json.gz` sniffs as `.gz`; the URL knows what is inside the archive."""
+
+    row = dict(ROW, mrf_url="https://x.org/charges.json.gz")
+    result = fetch_one(row, str(tmp_path), opener=_opener([b"\x1f\x8b\x08rest"]))
+
+    assert result.path.endswith("_standardcharges.json.gz")
+
+
+def test_an_html_error_page_served_with_status_200_is_refused(tmp_path):
+    """Otherwise it is saved as a CSV and fails much later, somewhere less
+    obvious than the download that fetched it."""
+
+    result = fetch_one(
+        ROW, str(tmp_path), opener=_opener([b"<!DOCTYPE html><h1>Not Found</h1>"])
+    )
+
+    assert result.status == "error"
+    assert "HTML page" in result.note
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_sniffed_first_chunk_is_still_written(tmp_path):
+    """The peek must not eat the byte it looked at."""
+
+    result = fetch_one(ROW, str(tmp_path), opener=_opener([b"{", b'"a": 1}']))
+
+    assert result.bytes_written == 8
+    assert open(result.path, "rb").read() == b'{"a": 1}'
+
+
+def test_bytes_the_magic_does_not_recognize_keep_the_url_name(tmp_path):
+    row = dict(ROW, mrf_url="https://x.org/charges.csv")
+    result = fetch_one(row, str(tmp_path), opener=_opener([b"description,code|1\n"]))
+
+    assert result.path.endswith("_standardcharges.csv")
