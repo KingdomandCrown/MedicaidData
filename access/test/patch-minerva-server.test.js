@@ -251,3 +251,87 @@ test("hardening-only is idempotent too", () => {
   const once = applyAll(source, HARD);
   assert.equal(applyAll(once.text, HARD).text, once.text);
 });
+
+// --- putting it back ------------------------------------------------------
+
+const { originalBackup, revert } = require(
+  path.join(__dirname, "..", "patch-minerva-server.js"),
+);
+
+function scratch(t) {
+  const os = require("node:os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "revert-"));
+  const server = path.join(dir, "server.js");
+  fs.writeFileSync(server, source);
+  return { dir, server };
+}
+
+const quiet = (fn) => {
+  const log = console.log;
+  console.log = () => {};
+  try { return fn(); } finally { console.log = log; }
+};
+
+test("the oldest backup is the original, not the newest", () => {
+  // Every --apply writes one, so after a few rounds only the first is the
+  // untouched file. Reverting to the newest would look like it worked and
+  // change nothing.
+  const { dir, server } = scratch();
+  fs.writeFileSync(server + ".bak-2026-08-26T23-55-38-249Z", "ORIGINAL");
+  fs.writeFileSync(server + ".bak-2026-08-27T00-25-31-354Z", "ALREADY PATCHED");
+
+  assert.equal(path.basename(originalBackup(server)), "server.js.bak-2026-08-26T23-55-38-249Z");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("reverting restores the file the patcher first saw", () => {
+  const { dir, server } = scratch();
+  const patched = applyAll(source, ALL).text;
+  fs.writeFileSync(server + ".bak-2026-08-26T23-55-38-249Z", source);
+  fs.writeFileSync(server, patched);
+
+  assert.equal(quiet(() => revert(server)), 0);
+  assert.equal(fs.readFileSync(server, "utf8"), source);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("reverting an already-reverted file changes nothing", () => {
+  const { dir, server } = scratch();
+  fs.writeFileSync(server + ".bak-2026-08-26T23-55-38-249Z", source);
+
+  assert.equal(quiet(() => revert(server)), 0);
+  assert.equal(fs.readFileSync(server, "utf8"), source);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("reverting with no backup refuses rather than guessing", () => {
+  const { dir, server } = scratch();
+  const err = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(revert(server), 1);
+  } finally {
+    console.error = err;
+  }
+  assert.equal(fs.readFileSync(server, "utf8"), source);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a reverted file takes the hardening patch cleanly", () => {
+  // The path out of the full patch and into Cloudflare-only.
+  const { dir, server } = scratch();
+  fs.writeFileSync(server + ".bak-2026-08-26T23-55-38-249Z", source);
+  fs.writeFileSync(server, applyAll(source, ALL).text);
+  quiet(() => revert(server));
+
+  const { text, results } = applyAll(fs.readFileSync(server, "utf8"), HARD);
+  // The fixture already defines ollamaGenerate, so that edit is "unneeded"
+  // rather than applied — the real server.js is the one missing it.
+  assert.deepEqual(
+    results.filter((r) => r.status === "applied").map((r) => r.id).sort(),
+    ["health-hardening", "listen-loopback"],
+  );
+  assert.equal(text.includes("bootAccess"), false);
+  assert.equal(text.includes("scope.assertCcn"), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

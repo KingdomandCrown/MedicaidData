@@ -4,6 +4,7 @@
  *
  *     node access/patch-minerva-server.js            # report only, changes nothing
  *     node access/patch-minerva-server.js --apply    # write it, after a backup
+ *     node access/patch-minerva-server.js --revert   # put the original back
  *
  * ## Why a script and not a diff
  *
@@ -475,6 +476,50 @@ function checkOllamaGenerate(text) {
   return { called, defined };
 }
 
+/**
+ * The file as it was before this script first touched it.
+ *
+ * Every --apply writes a timestamped backup, so after a few rounds there is a
+ * stack of them and only the oldest is the original: the others are snapshots
+ * of an already-patched file. Reverting to the newest would look like it
+ * worked and change nothing.
+ */
+function originalBackup(serverPath) {
+  const dir = path.dirname(serverPath);
+  const prefix = path.basename(serverPath) + ".bak-";
+  let entries;
+  try {
+    entries = fs.readdirSync(dir).filter((f) => f.startsWith(prefix));
+  } catch {
+    return null;
+  }
+  if (!entries.length) return null;
+  // The suffix is an ISO timestamp, so lexical order is chronological.
+  entries.sort();
+  return path.join(dir, entries[0]);
+}
+
+function revert(serverPath) {
+  const backup = originalBackup(serverPath);
+  if (!backup) {
+    console.error(`No backup found beside ${serverPath}. Nothing to revert to.`);
+    return 1;
+  }
+  const current = fs.readFileSync(serverPath, "utf8");
+  const restored = fs.readFileSync(backup, "utf8");
+  if (current === restored) {
+    console.log(`Already matches ${path.basename(backup)}. Nothing to do.`);
+    return 0;
+  }
+  fs.writeFileSync(serverPath, restored);
+  console.log(`Restored ${serverPath}`);
+  console.log(`  from ${path.basename(backup)}, the oldest backup beside it.`);
+  console.log("");
+  console.log("The access modules are still in access/ and are simply not called.");
+  console.log("Restart to pick this up:  pm2 restart minerva-40");
+  return 0;
+}
+
 // --- cli ------------------------------------------------------------------
 
 function main(argv) {
@@ -490,6 +535,8 @@ function main(argv) {
 
   const enable = argv.filter((a) => a.startsWith("--fix-"));
   const mode = argv.includes("--hardening-only") ? "hardening" : "access";
+  if (argv.includes("--revert")) return revert(serverPath);
+
   const source = fs.readFileSync(serverPath, "utf8");
   const { text, results } = applyAll(source, { enable, mode });
 
@@ -573,4 +620,6 @@ if (require.main === module) {
   process.exit(main(process.argv.slice(2)));
 }
 
-module.exports = { EDITS, applyAll, applyOne, checkOllamaGenerate, main };
+module.exports = {
+  EDITS, applyAll, applyOne, checkOllamaGenerate, originalBackup, revert, main,
+};
