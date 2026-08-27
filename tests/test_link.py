@@ -159,3 +159,91 @@ def test_other_punctuation_still_separates_words():
 
     assert normalize_name("ST. LUKE'S-ROOSEVELT") == "ST LUKES ROOSEVELT"
     assert normalize_name("MERCY/ST VINCENT") == "MERCY ST VINCENT"
+
+
+# --- a file we downloaded ourselves ---------------------------------------
+
+
+@pytest.fixture
+def linked(tmp_path):
+    """An empty database plus the two helpers these tests need."""
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'l.sqlite'}")
+    init_db(engine)
+    return engine
+
+
+def _add_source(engine, source_file, **extra):
+    row = {
+        "source_file": source_file,
+        "charge_count": 1,
+        "ingested_at": dt.datetime(2026, 1, 1),
+    }
+    row.update(extra)
+    with engine.begin() as conn:
+        conn.execute(insert(charge_sources), row)
+
+
+def _linked_as(engine, source_file):
+    with engine.connect() as conn:
+        return conn.execute(
+            select(charge_sources.c.ccn, charge_sources.c.link_method).where(
+                charge_sources.c.source_file == source_file
+            )
+        ).one()
+
+
+def test_a_downloaded_file_links_by_the_ccn_in_its_name(linked):
+    """Discovery started from the hospital, so the owner was known before the
+    URL was. That is a fact, not a heuristic, and should be used as one."""
+
+    _insert_hospital(linked, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
+    name = "ccn-170027_pratt-regional-medical-center_standardcharges.json"
+    _add_source(linked, name, hospital_name="SOMETHING ELSE ENTIRELY")
+
+    summary = link_charges(linked)
+
+    assert summary.by_filename == 1
+    assert summary.unlinked == 0
+    assert _linked_as(linked, name) == ("170027", "filename_ccn")
+
+
+def test_the_filename_ccn_wins_over_the_name_heuristic(linked):
+    """The heuristic reconstructs after the fact what the filename already knows."""
+
+    _insert_hospital(linked, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
+    _insert_hospital(linked, "170045", "VIA CHRISTI ST FRANCIS", "KS")
+    _add_source(
+        linked,
+        "ccn-170027_x_standardcharges.json",
+        hospital_name="VIA CHRISTI ST FRANCIS",
+        license_state="KS",
+    )
+
+    link_charges(linked)
+    assert _linked_as(linked, "ccn-170027_x_standardcharges.json").ccn == "170027"
+
+
+def test_a_ccn_no_hospital_has_is_not_invented(linked):
+    """A hand-renamed file must not conjure a hospital that does not exist."""
+
+    _insert_hospital(linked, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
+    _add_source(linked, "ccn-999999_made-up_standardcharges.json")
+
+    summary = link_charges(linked)
+    assert summary.by_filename == 0
+    assert _linked_as(linked, "ccn-999999_made-up_standardcharges.json").ccn is None
+
+
+def test_an_ordinary_filename_is_untouched_by_this(linked):
+    _insert_hospital(linked, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
+    _add_source(
+        linked,
+        "480598437_PRATT-REGIONAL_standardcharges.json",
+        hospital_name="PRATT REGIONAL MEDICAL CENTER",
+        license_state="KS",
+    )
+
+    summary = link_charges(linked)
+    assert summary.by_filename == 0
+    assert summary.by_name == 1

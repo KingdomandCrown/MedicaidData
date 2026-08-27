@@ -19,6 +19,7 @@ Run offline against a downloaded POS CSV::
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 
 from sqlalchemy.exc import OperationalError
@@ -31,6 +32,9 @@ from .crosswalk import fetch_crosswalk
 from .db import count_charges, count_hospitals, make_engine
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
+from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
+from .mrf_fetch import MAX_BYTES, fetch_one, requests_opener
+from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
@@ -293,6 +297,60 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="Hospitals a candidate system needs before it is ranked as one "
         "rather than listed as independents (default: 2).",
+    )
+
+    disc = sub.add_parser(
+        "discover-mrf",
+        help="Find each hospital's machine-readable file from its own website "
+        "(writes a manifest CSV; downloads nothing).",
+    )
+    disc.add_argument("--database-url", default=DEFAULT_DB_URL)
+    disc.add_argument(
+        "--state",
+        action="append",
+        default=None,
+        help="Restrict to a state; repeatable. Omit for every state.",
+    )
+    disc.add_argument(
+        "--websites",
+        default=DEFAULT_INFO_PATH,
+        help=f"hospital-info.json to read websites from (default: {DEFAULT_INFO_PATH}).",
+    )
+    disc.add_argument("--output", default="mrf_manifest.csv", help="Manifest to write.")
+    disc.add_argument("--limit", type=int, default=None, help="Stop after N hospitals.")
+    disc.add_argument(
+        "--include-covered",
+        action="store_true",
+        help="Also ask hospitals that already have a file (to refresh a stale one).",
+    )
+    disc.add_argument(
+        "--timeout", type=int, default=20, help="Seconds per request (default: 20)."
+    )
+
+    fetchm = sub.add_parser(
+        "fetch-mrf",
+        help="Download the files a discovery manifest found.",
+    )
+    fetchm.add_argument("manifest", help="CSV written by discover-mrf.")
+    fetchm.add_argument(
+        "--dest", required=True, help="Folder to download into."
+    )
+    fetchm.add_argument("--limit", type=int, default=None, help="Stop after N files.")
+    fetchm.add_argument(
+        "--include-ambiguous",
+        action="store_true",
+        help="Also download rows a person has not resolved. Off by default: an "
+        "ambiguous row may be a different hospital in the same system.",
+    )
+    fetchm.add_argument(
+        "--overwrite", action="store_true", help="Re-download files already present."
+    )
+    fetchm.add_argument(
+        "--max-bytes", type=int, default=MAX_BYTES,
+        help="Stop any single download past this size.",
+    )
+    fetchm.add_argument(
+        "--timeout", type=int, default=60, help="Seconds per request (default: 60)."
     )
 
     fetchx = sub.add_parser(
@@ -797,6 +855,154 @@ def _cmd_gap_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_discover_mrf(args: argparse.Namespace) -> int:
+    """Ask each hospital's own website where its file is, and write it down.
+
+    Deliberately downloads nothing. A manifest can be read, sorted, corrected
+    and re-run; a crawl that discovers and downloads in one pass can only be
+    repeated in full.
+    """
+
+    engine = make_engine(args.database_url)
+
+    try:
+        websites = load_websites(args.websites)
+    except FileNotFoundError:
+        print(
+            f"\nNo website file at {args.websites}\n"
+            "That file is the scorecard app's hospital profile — pass its path\n"
+            "with --websites, or there is nothing to crawl from.",
+            file=sys.stderr,
+        )
+        return 2
+
+    summary = choose_targets(
+        engine,
+        websites,
+        states=args.state,
+        include_covered=args.include_covered,
+        limit=args.limit,
+    )
+
+    print(
+        f"\n{summary.in_scope} hospital(s) in scope: "
+        f"{summary.already_covered} already have a file, "
+        f"{summary.no_website} have no website on record, "
+        f"{len(summary.targets)} to ask."
+    )
+    if not summary.targets:
+        print("Nothing to do.")
+        return 0
+
+    fetch = _text_fetcher(args.timeout)
+    cache: dict = {}
+    rows: list[dict] = []
+    counts: dict[str, int] = {}
+
+    for n, target in enumerate(summary.targets, 1):
+        for discovery in discover_one(target.as_dict(), fetch, cache=cache):
+            rows.append(to_row(discovery))
+            counts[discovery.status] = counts.get(discovery.status, 0) + 1
+        if n % 25 == 0:
+            print(f"  {n}/{len(summary.targets)}...", flush=True)
+
+    with open(args.output, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(MANIFEST_COLUMNS))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    found = counts.get("found", 0)
+    ambiguous = counts.get("ambiguous", 0)
+    print()
+    for status in sorted(counts):
+        print(f"  {status:<12} {counts[status]}")
+    print(f"\nWrote {args.output} ({len(rows)} row(s), {found} ready to download).")
+    if ambiguous:
+        print(
+            f"\n{ambiguous} row(s) are ambiguous: a health system publishes one\n"
+            "cms-hpt.txt for every facility it owns, and no name matched clearly.\n"
+            "Picking wrong there is invisible afterwards — the file is valid, just\n"
+            "somebody else's — so open the manifest, set the right row's status to\n"
+            "'found', and delete the rest for that CCN."
+        )
+    if found:
+        print(f"\nThen:  hospitals fetch-mrf {args.output} --dest <folder>")
+    return 0
+
+
+def _cmd_fetch_mrf(args: argparse.Namespace) -> int:
+    with open(args.manifest, "r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    wanted = {"found"} | ({"ambiguous"} if args.include_ambiguous else set())
+    todo = [r for r in rows if (r.get("status") or "").strip() in wanted and r.get("mrf_url")]
+    skipped = len(rows) - len(todo)
+    if args.limit is not None:
+        todo = todo[: args.limit]
+
+    print(f"\n{len(todo)} file(s) to fetch ({skipped} row(s) not ready).")
+    if not todo:
+        return 0
+
+    opener = requests_opener(timeout=args.timeout)
+    counts: dict[str, int] = {}
+    total_bytes = 0
+
+    for n, row in enumerate(todo, 1):
+        result = fetch_one(
+            row,
+            args.dest,
+            opener=opener,
+            max_bytes=args.max_bytes,
+            overwrite=args.overwrite,
+        )
+        counts[result.status] = counts.get(result.status, 0) + 1
+        if result.status == "ok":
+            total_bytes += result.bytes_written
+        print(
+            f"  [{n}/{len(todo)}] {row.get('ccn','')} {result.status}"
+            + (f" — {result.note}" if result.note and result.status != "skipped" else "")
+        )
+
+    print()
+    for status in sorted(counts):
+        print(f"  {status:<10} {counts[status]}")
+    print(f"\nDownloaded {total_bytes / 1e9:.2f} GB into {args.dest}")
+    print(
+        "\nThen:  hospitals ingest-charges --path "
+        f"{args.dest} --database-url <url>\n"
+        "       hospitals link-charges --database-url <url>\n"
+        "Every file here carries its CCN in the name, so linking is exact."
+    )
+    return 0
+
+
+def _text_fetcher(timeout: int):
+    """Fetch a small text file, returning None for anything that is not one."""
+
+    import requests
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "MinervaAI-MRF-Discovery/1.0 (+price transparency research)",
+            "Accept": "text/plain,*/*",
+        }
+    )
+
+    def fetch(url: str):
+        try:
+            response = session.get(url, timeout=timeout, allow_redirects=True)
+        except Exception:  # noqa: BLE001 - one unreachable host is a row, not a crash
+            return None
+        if response.status_code != 200:
+            return None
+        # cms-hpt.txt is a few hundred bytes. Anything large is a web page.
+        return response.text[:200_000]
+
+    return fetch
+
+
 def _cmd_fetch_crosswalk(args: argparse.Namespace) -> int:
     from .crosswalk import HOSPITAL_ENROLLMENT_TITLE
 
@@ -879,6 +1085,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_coverage(args)
     if args.command == "scan-ingested":
         return _cmd_scan_ingested(args)
+    if args.command == "discover-mrf":
+        return _cmd_discover_mrf(args)
+    if args.command == "fetch-mrf":
+        return _cmd_fetch_mrf(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
     if args.command == "fetch-crosswalk":

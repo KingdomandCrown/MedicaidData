@@ -27,6 +27,7 @@ from sqlalchemy.engine import Engine
 
 from .db import charge_sources, hospitals, npi_ccn_crosswalk
 from .logging_config import get_logger
+from .price_transparency import ccn_from_filename
 
 log = get_logger(__name__)
 
@@ -70,6 +71,7 @@ class LinkSummary:
     by_crosswalk: int
     by_name: int
     unlinked: int
+    by_filename: int = 0
 
 
 # --- crosswalk loading ----------------------------------------------------
@@ -164,9 +166,14 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
             if key[0]:
                 name_index.setdefault(key, set()).add(h.ccn)
 
+        known_ccns = {
+            row.ccn for row in conn.execute(select(hospitals.c.ccn)) if row.ccn
+        }
+
         sources = conn.execute(
             select(
                 charge_sources.c.id,
+                charge_sources.c.source_file,
                 charge_sources.c.hospital_name,
                 charge_sources.c.npis,
                 charge_sources.c.primary_npi,
@@ -175,22 +182,33 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
             )
         ).mappings().all()
 
-        by_crosswalk = by_name = 0
+        by_crosswalk = by_name = by_filename = 0
         for src in sources:
             ccn = None
             method = None
 
+            # A file this package downloaded carries its CCN in the filename,
+            # because discovery started from the hospital: the owner was known
+            # before the URL was. That beats both heuristics below, which
+            # reconstruct after the fact what this already knows — but only if
+            # the CCN is one the POS file recognises, so a hand-renamed file
+            # cannot invent a hospital.
+            stamped = ccn_from_filename(src["source_file"] or "")
+            if stamped and stamped in known_ccns:
+                ccn, method = stamped, "filename_ccn"
+
             # ``npis`` is the pipe-joined list from the file's metadata;
             # ``primary_npi`` may have been filled in from the filename for a
             # file that carried none. Either is a legitimate identifier.
-            candidates_npi = (src["npis"] or "").split("|")
-            if src["primary_npi"]:
-                candidates_npi.append(src["primary_npi"])
-            for npi in candidates_npi:
-                npi = npi.strip()
-                if npi and npi in crosswalk:
-                    ccn, method = crosswalk[npi], "crosswalk_npi"
-                    break
+            if ccn is None:
+                candidates_npi = (src["npis"] or "").split("|")
+                if src["primary_npi"]:
+                    candidates_npi.append(src["primary_npi"])
+                for npi in candidates_npi:
+                    npi = npi.strip()
+                    if npi and npi in crosswalk:
+                        ccn, method = crosswalk[npi], "crosswalk_npi"
+                        break
 
             if ccn is None and use_name_fallback:
                 state = _state_of(src)
@@ -206,18 +224,22 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
                     .where(charge_sources.c.id == src["id"])
                     .values(ccn=ccn, link_method=method)
                 )
-                if method == "crosswalk_npi":
+                if method == "filename_ccn":
+                    by_filename += 1
+                elif method == "crosswalk_npi":
                     by_crosswalk += 1
                 else:
                     by_name += 1
 
         total = len(sources)
 
-    unlinked = total - by_crosswalk - by_name
+    linked = by_filename + by_crosswalk + by_name
+    unlinked = total - linked
     log.info(
-        "Linked %d/%d charge sources (crosswalk=%d, name+state=%d, unlinked=%d)",
-        by_crosswalk + by_name,
+        "Linked %d/%d charge sources (filename=%d, crosswalk=%d, name+state=%d, unlinked=%d)",
+        linked,
         total,
+        by_filename,
         by_crosswalk,
         by_name,
         unlinked,
@@ -227,4 +249,5 @@ def link_charges(engine: Engine, use_name_fallback: bool = True) -> LinkSummary:
         by_crosswalk=by_crosswalk,
         by_name=by_name,
         unlinked=unlinked,
+        by_filename=by_filename,
     )

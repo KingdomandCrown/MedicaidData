@@ -206,6 +206,29 @@ def npi_from_filename(path: str) -> str | None:
     return None
 
 
+#: ``ccn-170027_pratt-regional_standardcharges.json`` — written by this
+#: package's own downloader, which knew the hospital before it knew the URL.
+_CCN_PREFIX_RE = re.compile(r"^ccn-(\d{2}[0-9A-Za-z]{4})[_.]", re.IGNORECASE)
+
+
+def ccn_from_filename(path: str) -> str | None:
+    """The CCN a downloader stamped on a file it fetched for a known hospital.
+
+    Every file in the database until now was attributed *after* it arrived —
+    by an NPI in its metadata, or by matching its hospital name against the POS
+    file — and 14% of them never linked at all. A file this package downloaded
+    is different: discovery started from the hospital, so the owner was known
+    before the URL was. This carries that certainty into ingestion.
+
+    The ``ccn-`` prefix is load-bearing. A bare ``170027`` at the front of a
+    filename sits exactly where :func:`ein_from_filename` and
+    :func:`npi_from_filename` look, and one of them would answer first.
+    """
+
+    match = _CCN_PREFIX_RE.match(_strip_hash_prefix(path))
+    return match.group(1).upper() if match else None
+
+
 def _adopt_filename_npi(metadata: "MrfMetadata", path: str) -> None:
     """Fall back to the filename's NPI when the file itself names none.
 
