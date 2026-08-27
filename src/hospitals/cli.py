@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
 
 from sqlalchemy.exc import OperationalError
@@ -51,7 +52,16 @@ from .scan import human_bytes, scan_for_ingested, write_listing
 
 log = get_logger(__name__)
 
-DEFAULT_DB_URL = "sqlite:///data/hospitals.sqlite"
+#: The database every command reads unless told otherwise.
+#:
+#: Reads $HOSPITALS_DATABASE_URL first so the real database can be named once,
+#: in a shell profile, instead of pasted onto every command. A shell variable
+#: that has to be re-exported in each new terminal is one an hour of work can
+#: silently run without.
+DEFAULT_DB_URL = (
+    os.environ.get("HOSPITALS_DATABASE_URL", "").strip()
+    or "sqlite:///data/hospitals.sqlite"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

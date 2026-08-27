@@ -227,17 +227,6 @@ def _busy_timeout_ms() -> int:
         return _SQLITE_BUSY_TIMEOUT_MS
 
 
-def make_engine(database_url: str, echo: bool = False) -> Engine:
-    """Create an engine, ensuring a SQLite file's parent directory exists."""
-
-    _ensure_sqlite_dir(database_url)
-    log.info("Connecting to database: %s", _redact(database_url))
-    engine = create_engine(database_url, echo=echo, future=True)
-    if database_url.startswith("sqlite"):
-        _configure_sqlite(engine)
-    return engine
-
-
 class EmptyDatabase(Exception):
     """The database has none of this package's tables.
 
@@ -246,6 +235,28 @@ class EmptyDatabase(Exception):
     making a new and useless database. The alternative diagnosis — a real but
     unpopulated database — has a different fix, so the message offers both.
     """
+
+
+def make_engine(database_url: str, echo: bool = False) -> Engine:
+    """Create an engine, ensuring a SQLite file's parent directory exists."""
+
+    if not str(database_url or "").strip():
+        # An unset shell variable expands to nothing, so `--database-url "$KB"`
+        # arrives as an empty string and SQLAlchemy reports it as an unparseable
+        # URL — true, and useless. The variable is the answer.
+        raise EmptyDatabase(
+            "No database URL. If you passed --database-url \"$SOMETHING\", that "
+            "variable is unset in this shell.\n"
+            "  Name it once instead:  export HOSPITALS_DATABASE_URL=sqlite:////full/path.sqlite\n"
+            "  (four slashes after sqlite: for an absolute path, three for a relative one)"
+        )
+
+    _ensure_sqlite_dir(database_url)
+    log.info("Connecting to database: %s", _redact(database_url))
+    engine = create_engine(database_url, echo=echo, future=True)
+    if database_url.startswith("sqlite"):
+        _configure_sqlite(engine)
+    return engine
 
 
 def require_schema(engine: Engine, database_url: str) -> None:

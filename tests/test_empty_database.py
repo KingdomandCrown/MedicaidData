@@ -66,3 +66,57 @@ def test_every_reading_command_says_the_same_thing(command, tmp_path, capsys):
 
     assert code == 2
     assert "nope.sqlite" in capsys.readouterr().err
+
+
+# --- an unset shell variable ----------------------------------------------
+
+
+def test_an_unset_shell_variable_names_itself_as_the_problem(capsys):
+    """`--database-url "$KB"` with KB unset arrives as an empty string.
+
+    SQLAlchemy calls that an unparseable URL, which is true and useless. An
+    hour of downloading can finish and then fail at the ingest on this.
+    """
+
+    code = main(["link-charges", "--database-url", ""])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "unset in this shell" in err
+    assert "HOSPITALS_DATABASE_URL" in err
+    assert "Traceback" not in err
+
+
+def test_whitespace_is_not_a_database_url():
+    with pytest.raises(EmptyDatabase):
+        make_engine("   ")
+
+
+def test_the_default_can_be_named_once_in_the_environment(monkeypatch, tmp_path):
+    """A variable that must be re-exported in every new terminal is one an
+    hour of work can silently run without."""
+
+    import importlib
+
+    url = f"sqlite:///{tmp_path / 'named.sqlite'}"
+    monkeypatch.setenv("HOSPITALS_DATABASE_URL", url)
+
+    import hospitals.cli as cli
+
+    importlib.reload(cli)
+    try:
+        assert cli.DEFAULT_DB_URL == url
+        assert cli.build_parser().parse_args(["stats"]).database_url == url
+    finally:
+        monkeypatch.delenv("HOSPITALS_DATABASE_URL")
+        importlib.reload(cli)
+
+
+def test_without_the_variable_the_default_is_unchanged(monkeypatch):
+    import importlib
+
+    monkeypatch.delenv("HOSPITALS_DATABASE_URL", raising=False)
+    import hospitals.cli as cli
+
+    importlib.reload(cli)
+    assert cli.DEFAULT_DB_URL == "sqlite:///data/hospitals.sqlite"
