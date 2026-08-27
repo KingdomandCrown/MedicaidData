@@ -153,6 +153,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep going when a file fails; report the failures at the end.",
     )
+    charges.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Load into a database with no hospitals in it. Refused by default: "
+        "those rows can never be linked, and it is almost always a wrong "
+        "--database-url.",
+    )
 
     link = sub.add_parser(
         "link-charges",
@@ -447,6 +454,34 @@ def _cmd_stats(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest_charges(args: argparse.Namespace) -> int:
+    # Charges are only worth anything once they are attributed, and attribution
+    # needs the POS universe. A database with no hospitals in it will accept
+    # every row and link none of them, which is how 38 million rows and an hour
+    # and a half of parsing went into the wrong file: an unset shell variable
+    # fell back to the default path, and nothing objected.
+    engine = make_engine(args.database_url)
+    try:
+        require_schema(engine, args.database_url)
+        known = count_hospitals(engine)
+    except EmptyDatabase:
+        known = 0
+    if known == 0 and not args.allow_empty:
+        print(
+            f"\nERROR: {args.database_url} holds no hospitals.\n"
+            "  Charge files loaded here can never be linked to a CCN, because\n"
+            "  there is nothing to link them to. This is almost always a wrong\n"
+            "  --database-url, or $HOSPITALS_DATABASE_URL unset in this shell:\n"
+            f"    HOSPITALS_DATABASE_URL is "
+            + (f"set to {os.environ['HOSPITALS_DATABASE_URL']}"
+               if os.environ.get("HOSPITALS_DATABASE_URL") else "NOT SET")
+            + "\n"
+            "  Load the hospitals first:  hospitals ingest --state ALL\n"
+            "  Or pass --allow-empty if this really is a scratch database.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"\nLoading into {args.database_url} ({known:,} hospitals known).")
     try:
         summaries = ingest_charge_path(
             args.path,

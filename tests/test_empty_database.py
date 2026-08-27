@@ -120,3 +120,89 @@ def test_without_the_variable_the_default_is_unchanged(monkeypatch):
 
     importlib.reload(cli)
     assert cli.DEFAULT_DB_URL == "sqlite:///data/hospitals.sqlite"
+
+
+# --- charges into a database with no hospitals -----------------------------
+
+
+def test_charges_are_refused_when_nothing_could_ever_link_them(tmp_path, capsys):
+    """38 million rows and ninety minutes of parsing went into the wrong file.
+
+    An unset shell variable fell back to the default path, the load succeeded,
+    every row was accepted, and `link-charges` then reported 0 of 118 linked —
+    the first sign that anything was wrong, long after the cost was paid.
+    """
+
+    from hospitals.db import init_db
+
+    url = f"sqlite:///{tmp_path / 'wrong.sqlite'}"
+    init_db(make_engine(url))
+    mrf = tmp_path / "a.csv"
+    mrf.write_text("description,code|1\n")
+
+    code = main(["ingest-charges", str(mrf), "--database-url", url])
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "holds no hospitals" in err
+    assert "HOSPITALS_DATABASE_URL" in err
+
+
+def test_the_refusal_says_whether_the_variable_is_set(tmp_path, capsys, monkeypatch):
+    from hospitals.db import init_db
+
+    url = f"sqlite:///{tmp_path / 'wrong.sqlite'}"
+    init_db(make_engine(url))
+    mrf = tmp_path / "a.csv"
+    mrf.write_text("description,code|1\n")
+
+    monkeypatch.delenv("HOSPITALS_DATABASE_URL", raising=False)
+    main(["ingest-charges", str(mrf), "--database-url", url])
+    assert "NOT SET" in capsys.readouterr().err
+
+    monkeypatch.setenv("HOSPITALS_DATABASE_URL", "sqlite:///somewhere.sqlite")
+    main(["ingest-charges", str(mrf), "--database-url", url])
+    assert "set to sqlite:///somewhere.sqlite" in capsys.readouterr().err
+
+
+def test_a_scratch_database_can_be_asked_for_explicitly(tmp_path, capsys):
+    """Refusing outright would block a legitimate charges-before-POS start."""
+
+    from hospitals.db import init_db
+
+    url = f"sqlite:///{tmp_path / 'scratch.sqlite'}"
+    init_db(make_engine(url))
+    mrf = tmp_path / "a.csv"
+    mrf.write_text("description,code|1\n")
+
+    code = main(["ingest-charges", str(mrf), "--database-url", url, "--allow-empty",
+                 "--continue-on-error"])
+    assert code == 0
+
+
+def test_a_populated_database_says_which_one_it_is(tmp_path, capsys):
+    """The destination is printed before the work, not inferred after it."""
+
+    import datetime as dt
+
+    from sqlalchemy import insert
+
+    from hospitals.db import hospitals as hospitals_table, init_db
+
+    url = f"sqlite:///{tmp_path / 'real.sqlite'}"
+    engine = make_engine(url)
+    init_db(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(hospitals_table),
+            dict(ccn="170027", name="PRATT", state="KS", is_active=True,
+                 ingested_at=dt.datetime(2026, 8, 27)),
+        )
+
+    mrf = tmp_path / "a.csv"
+    mrf.write_text("description,code|1\n")
+    main(["ingest-charges", str(mrf), "--database-url", url, "--continue-on-error"])
+
+    out = capsys.readouterr().out
+    assert "real.sqlite" in out
+    assert "1 hospitals known" in out
