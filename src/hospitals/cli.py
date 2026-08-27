@@ -29,7 +29,13 @@ from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
 from .coverage import coverage_for
 from .crosswalk import fetch_crosswalk
-from .db import count_charges, count_hospitals, make_engine
+from .db import (
+    EmptyDatabase,
+    count_charges,
+    count_hospitals,
+    make_engine,
+    require_schema,
+)
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
@@ -461,6 +467,7 @@ def _cmd_ingest_charges(args: argparse.Namespace) -> int:
 
 def _cmd_link_charges(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     if args.crosswalk:
         try:
             loaded = load_crosswalk(engine, args.crosswalk)
@@ -480,6 +487,7 @@ def _cmd_link_charges(args: argparse.Namespace) -> int:
 
 def _cmd_duplicates(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     report = find_duplicate_loads(engine)
 
     if not report.groups:
@@ -532,6 +540,7 @@ def _cmd_duplicates(args: argparse.Namespace) -> int:
 
 def _cmd_prune_duplicates(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     summary = prune_redownloads(engine, apply=args.apply)
 
     if not summary.file_count:
@@ -559,6 +568,7 @@ def _cmd_prune_duplicates(args: argparse.Namespace) -> int:
 
 def _cmd_repair_eins(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     summary = repair_eins(
         engine, apply=args.apply, sources_only=args.sources_only
     )
@@ -600,6 +610,7 @@ def _cmd_repair_eins(args: argparse.Namespace) -> int:
 
 def _cmd_backfill_npis(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     summary = backfill_npis(engine, apply=args.apply)
 
     if not summary.source_count:
@@ -666,6 +677,7 @@ def _cmd_archive_ingested(args: argparse.Namespace) -> int:
 
 def _cmd_price(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     report = price_for_code(
         engine,
         args.code,
@@ -717,6 +729,7 @@ def _cmd_price(args: argparse.Namespace) -> int:
 
 def _cmd_coverage(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     report = coverage_for(engine, args.pattern, state=args.state)
 
     print(f"\n{report.diagnosis}.")
@@ -819,6 +832,7 @@ def _cmd_scan_ingested(args: argparse.Namespace) -> int:
 
 def _cmd_gap_report(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
     report = build_gap_report(engine, min_system_size=args.min_system_size)
 
     if not report.total_hospitals:
@@ -864,6 +878,7 @@ def _cmd_discover_mrf(args: argparse.Namespace) -> int:
     """
 
     engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
 
     try:
         websites = load_websites(args.websites)
@@ -1044,6 +1059,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return _dispatch(parser, args)
+    except EmptyDatabase as exc:
+        # A wrong --database-url is the commonest way to reach this, and it
+        # used to arrive as sixty lines of SQLAlchemy traceback ending in
+        # "no such table". The path is the answer; print the path.
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 2
     except OperationalError as exc:
         if "database is locked" not in str(exc).lower():
             raise

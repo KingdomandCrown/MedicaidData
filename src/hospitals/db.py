@@ -238,6 +238,43 @@ def make_engine(database_url: str, echo: bool = False) -> Engine:
     return engine
 
 
+class EmptyDatabase(Exception):
+    """The database has none of this package's tables.
+
+    Almost always a mistyped ``--database-url``: SQLite creates an empty file
+    for any path it is handed, so a wrong path does not fail, it succeeds at
+    making a new and useless database. The alternative diagnosis — a real but
+    unpopulated database — has a different fix, so the message offers both.
+    """
+
+
+def require_schema(engine: Engine, database_url: str) -> None:
+    """Fail early and legibly when the database is not the one intended."""
+
+    from sqlalchemy import inspect
+
+    present = set(inspect(engine).get_table_names())
+    expected = {t.name for t in metadata.tables.values()}
+    if present & expected:
+        return
+
+    detail = ""
+    if database_url.startswith("sqlite"):
+        path = database_url.split("///", 1)[-1]
+        if os.path.exists(path) and os.path.getsize(path) < 100_000:
+            size = os.path.getsize(path)
+            detail = (
+                f"\n  {path} exists but is {size} bytes — SQLite makes an empty "
+                "file\n  for any path it is given, so this is very likely a typo."
+            )
+
+    raise EmptyDatabase(
+        f"No hospitals tables in {_redact(database_url)}.{detail}\n"
+        "  Either the path is wrong, or this database has not been built yet:\n"
+        "    hospitals ingest --state ALL --database-url <url>"
+    )
+
+
 def _configure_sqlite(engine: Engine) -> None:
     """Make a file-backed SQLite database usable while a long batch runs.
 
