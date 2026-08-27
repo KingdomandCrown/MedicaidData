@@ -40,7 +40,7 @@ from .db import (
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
-from .mrf_fetch import MAX_BYTES, fetch_one, requests_opener
+from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
 from .ingest import ingest_state
 from .ingest_charges import ingest_charge_path
@@ -985,13 +985,28 @@ def _cmd_fetch_mrf(args: argparse.Namespace) -> int:
     total_bytes = 0
 
     for n, row in enumerate(todo, 1):
-        result = fetch_one(
-            row,
-            args.dest,
-            opener=opener,
-            max_bytes=args.max_bytes,
-            overwrite=args.overwrite,
-        )
+        # fetch_one handles the failures it knows about. This catches the ones
+        # it does not, because a run that stops at file 40 of 123 has spent the
+        # bandwidth and kept none of the record of what happened.
+        try:
+            result = fetch_one(
+                row,
+                args.dest,
+                opener=opener,
+                max_bytes=args.max_bytes,
+                overwrite=args.overwrite,
+            )
+        except KeyboardInterrupt:
+            print(f"\nStopped at {n}/{len(todo)}. Re-run to resume; "
+                  "files already downloaded are skipped.")
+            break
+        except Exception as exc:  # noqa: BLE001
+            result = Fetched(
+                ccn=str(row.get("ccn") or ""),
+                url=str(row.get("mrf_url") or ""),
+                status="error",
+                note=f"{type(exc).__name__}: {exc}",
+            )
         counts[result.status] = counts.get(result.status, 0) + 1
         if result.status == "ok":
             total_bytes += result.bytes_written
