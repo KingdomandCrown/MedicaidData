@@ -1019,10 +1019,11 @@ def _cmd_fetch_mrf(args: argparse.Namespace) -> int:
     for status in sorted(counts):
         print(f"  {status:<10} {counts[status]}")
     print(f"\nDownloaded {total_bytes / 1e9:.2f} GB into {args.dest}")
+    # The path is positional. Printing a flag that does not exist wastes the
+    # first attempt of whoever copies this line, which is everyone.
     print(
-        "\nThen:  hospitals ingest-charges --path "
-        f"{args.dest} --database-url <url>\n"
-        "       hospitals link-charges --database-url <url>\n"
+        f"\nThen:  hospitals ingest-charges {args.dest} --skip-existing --continue-on-error\n"
+        "       hospitals link-charges\n"
         "Every file here carries its CCN in the name, so linking is exact."
     )
     return 0

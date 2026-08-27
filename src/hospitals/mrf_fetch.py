@@ -115,6 +115,7 @@ def existing_download(dest_dir: str, ccn: str, name: str) -> str | None:
     except OSError:
         return None
     for entry in sorted(entries):
+        # A scratch file is a download in progress, not a download.
         if entry.startswith(stem) and not entry.endswith(".part"):
             return os.path.join(dest_dir, entry)
     return None
@@ -188,7 +189,12 @@ def fetch_one(
     result.path = path
 
     os.makedirs(dest_dir, exist_ok=True)
-    partial = path + ".part"
+    # The pid is in the scratch name because two fetch runs can overlap — a
+    # backgrounded job that looks finished, started again. Sharing one ".part"
+    # meant whichever finished first renamed it out from under the other, which
+    # then died on os.replace with a FileNotFoundError naming a file it had
+    # just written itself.
+    partial = f"{path}.{os.getpid()}.part"
     written = 0
     try:
         with open(partial, "wb") as handle:

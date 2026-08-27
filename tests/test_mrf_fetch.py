@@ -251,3 +251,35 @@ def test_a_leftover_part_file_does_not_count_as_a_finished_download(tmp_path):
 
     result = fetch_one(ROW, str(tmp_path), opener=_opener([b"abcdef"]))
     assert result.status == "ok"
+
+
+def test_two_overlapping_runs_do_not_collide_on_one_scratch_file(tmp_path):
+    """A backgrounded job that looked finished, started again.
+
+    Both wrote the same ".part" name; the first to finish renamed it away, and
+    the second died on os.replace naming a file it had just written itself.
+    """
+
+    import os as _os
+    from unittest import mock
+
+    seen = []
+
+    def opener(url):
+        def chunks():
+            yield b"abc"
+            seen.append(sorted(p.name for p in tmp_path.iterdir()))
+
+        return "application/json", chunks()
+
+    with mock.patch.object(_os, "getpid", return_value=4242):
+        fetch_one(ROW, str(tmp_path), opener=opener)
+
+    assert any(name.endswith(".4242.part") for name in seen[0])
+
+
+def test_a_stale_scratch_file_is_not_mistaken_for_a_download(tmp_path):
+    from hospitals.mrf_fetch import existing_download
+
+    (tmp_path / "ccn-170027_pratt-regional-medical-center_standardcharges.json.999.part").write_bytes(b"x")
+    assert existing_download(str(tmp_path), "170027", ROW["name"]) is None
