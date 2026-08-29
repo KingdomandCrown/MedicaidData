@@ -522,9 +522,13 @@ def _cmd_link_charges(args: argparse.Namespace) -> int:
             return 2
         print(f"Loaded {loaded} crosswalk rows.")
     summary = link_charges(engine, use_name_fallback=not args.no_name_fallback)
+    # The total is derived from the parts rather than re-added by hand, because
+    # it was: a new link method was added and this line kept summing the old
+    # two, printing 897 where the log beside it said 1015.
+    linked = summary.total - summary.unlinked
     print(
-        f"\nLinked {summary.by_crosswalk + summary.by_name}/{summary.total} "
-        f"charge sources (crosswalk={summary.by_crosswalk}, "
+        f"\nLinked {linked}/{summary.total} charge sources "
+        f"(filename={summary.by_filename}, crosswalk={summary.by_crosswalk}, "
         f"name+state={summary.by_name}, unlinked={summary.unlinked})."
     )
     return 0

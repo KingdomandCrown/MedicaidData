@@ -247,3 +247,25 @@ def test_an_ordinary_filename_is_untouched_by_this(linked):
     summary = link_charges(linked)
     assert summary.by_filename == 0
     assert summary.by_name == 1
+
+
+def test_the_printed_total_counts_every_method(linked, capsys):
+    """It printed 897 where the log beside it said 1015.
+
+    A link method was added and this line went on summing the old two. Deriving
+    the total from `total - unlinked` means the next method to be added cannot
+    be quietly left out of it.
+    """
+
+    from hospitals.cli import main
+
+    _insert_hospital(linked, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
+    _add_source(linked, "ccn-170027_pratt_standardcharges.json")
+    _add_source(linked, "unlinkable.json")
+
+    url = str(linked.url)
+    main(["link-charges", "--database-url", url])
+
+    out = capsys.readouterr().out
+    assert "Linked 1/2" in out
+    assert "filename=1" in out
