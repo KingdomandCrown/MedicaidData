@@ -28,6 +28,7 @@ from sqlalchemy.exc import OperationalError
 from . import __version__
 from .cms_pos import CmsUnavailableError
 from .archive import archive_ingested
+from .assign import apply_links, read_suggestions, suggest_rows, write_suggestions
 from .coverage import coverage_for
 from .crosswalk import fetch_crosswalk
 from .db import (
@@ -374,6 +375,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetchm.add_argument(
         "--timeout", type=int, default=60, help="Seconds per request (default: 60)."
+    )
+
+    suggest = sub.add_parser(
+        "suggest-links",
+        help="Write the (file -> hospital) pairs a person should rule on (CSV).",
+    )
+    suggest.add_argument("--database-url", default=DEFAULT_DB_URL)
+    suggest.add_argument(
+        "--output", default="link_suggestions.csv", help="CSV to write."
+    )
+    suggest.add_argument(
+        "--limit", type=int, default=None, help="Only the top N by charge rows."
+    )
+
+    applyl = sub.add_parser(
+        "apply-links",
+        help="Record confirmed (file -> hospital) decisions (dry run unless --apply).",
+    )
+    applyl.add_argument("path", help="CSV written by suggest-links, with confirm filled in.")
+    applyl.add_argument("--database-url", default=DEFAULT_DB_URL)
+    applyl.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually write. Without it, only report what would change.",
+    )
+    applyl.add_argument(
+        "--relink",
+        action="store_true",
+        help="Allow changing a file that is already attributed to another hospital.",
     )
 
     fetchx = sub.add_parser(
@@ -1094,6 +1124,65 @@ def _text_fetcher(timeout: int):
     return fetch
 
 
+def _cmd_suggest_links(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    rows = suggest_rows(engine, limit=args.limit)
+
+    if not rows:
+        print(
+            "\nNothing to review: every file we hold is either attributed or "
+            "resembles no hospital on the worklist."
+        )
+        return 0
+
+    write_suggestions(rows, args.output)
+    files = len({r["source_file"] for r in rows})
+    charges = sum(
+        int(r["charge_rows"] or 0)
+        for r in {r["source_file"]: r for r in rows}.values()
+    )
+    print(f"\nWrote {args.output}: {len(rows)} pair(s) across {files} file(s), "
+          f"{charges:,} charge row(s).")
+    print(
+        "\nOpen it, put y in the confirm column of each row that is right, and\n"
+        "delete or leave blank the rest. One file may appear more than once — "
+        "confirm at most one.\n"
+        f"  hospitals apply-links {args.output}            # dry run\n"
+        f"  hospitals apply-links {args.output} --apply    # write it"
+    )
+    return 0
+
+
+def _cmd_apply_links(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    try:
+        rows = read_suggestions(args.path)
+    except FileNotFoundError:
+        print(f"\nERROR: no such file: {args.path}", file=sys.stderr)
+        return 2
+
+    summary = apply_links(
+        engine, rows, dry_run=not args.apply, relink=args.relink
+    )
+
+    print(
+        f"\n{summary.rows} row(s): {summary.applied} to apply, "
+        f"{summary.skipped} not confirmed, {summary.refused} refused."
+    )
+    for problem in summary.problems[:20]:
+        print(f"  REFUSED  {problem.source_file}: {problem.note}")
+    if len(summary.problems) > 20:
+        print(f"  ... and {len(summary.problems) - 20} more")
+
+    if not args.apply and summary.applied:
+        print("\nDry run. Re-run with --apply to write these attributions.")
+    elif args.apply and summary.applied:
+        print("\nThen:  hospitals gap-report --output <file.xlsx>")
+    return 0
+
+
 def _cmd_fetch_crosswalk(args: argparse.Namespace) -> int:
     from .crosswalk import HOSPITAL_ENROLLMENT_TITLE
 
@@ -1186,6 +1275,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_discover_mrf(args)
     if args.command == "fetch-mrf":
         return _cmd_fetch_mrf(args)
+    if args.command == "suggest-links":
+        return _cmd_suggest_links(args)
+    if args.command == "apply-links":
+        return _cmd_apply_links(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
     if args.command == "fetch-crosswalk":
