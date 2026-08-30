@@ -1011,10 +1011,16 @@ def _cmd_discover_mrf(args: argparse.Namespace) -> int:
         if n % 25 == 0:
             print(f"  {n}/{len(summary.targets)}...", flush=True)
 
-    with open(args.output, "w", encoding="utf-8", newline="") as handle:
+    # Written beside the target and renamed into place. A discovery run and a
+    # fetch run reading the same manifest is the obvious thing to do -- the
+    # command that finishes prints the one that follows -- and a half-written
+    # CSV read by the fetcher would be a truncated work list nobody notices.
+    scratch = f"{args.output}.{os.getpid()}.tmp"
+    with open(scratch, "w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(MANIFEST_COLUMNS))
         writer.writeheader()
         writer.writerows(rows)
+    os.replace(scratch, args.output)
 
     found = counts.get("found", 0)
     ambiguous = counts.get("ambiguous", 0)
