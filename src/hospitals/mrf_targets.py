@@ -56,12 +56,14 @@ class Target:
     name: str
     state: str | None
     website: str | None
+    city: str | None = None
 
     def as_dict(self) -> dict:
         return {
             "ccn": self.ccn,
             "name": self.name,
             "state": self.state,
+            "city": self.city,
             "website": self.website,
         }
 
@@ -108,7 +110,9 @@ def choose_targets(
             )
         }
 
-        stmt = select(hospitals.c.ccn, hospitals.c.name, hospitals.c.state)
+        stmt = select(
+            hospitals.c.ccn, hospitals.c.name, hospitals.c.state, hospitals.c.city
+        )
         if wanted:
             stmt = stmt.where(hospitals.c.state.in_(sorted(wanted)))
         stmt = stmt.order_by(hospitals.c.state, hospitals.c.name)
@@ -125,7 +129,13 @@ def choose_targets(
                 summary.no_website += 1
                 continue
             summary.targets.append(
-                Target(ccn=row.ccn, name=row.name or "", state=row.state, website=website)
+                Target(
+                    ccn=row.ccn,
+                    name=row.name or "",
+                    state=row.state,
+                    city=row.city,
+                    website=website,
+                )
             )
 
     if limit is not None:

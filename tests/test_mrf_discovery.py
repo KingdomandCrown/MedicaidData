@@ -315,3 +315,76 @@ def test_a_site_with_nothing_is_also_only_tried_once():
 def test_a_row_carries_no_none_values_into_the_csv():
     row = to_row(Discovery(ccn="170027", name="PRATT"))
     assert all(isinstance(v, str) for v in row.values())
+
+
+# --- telling one Kaiser from another --------------------------------------
+
+
+KAISER = [
+    ("Kaiser Foundation Hospital - Fresno", "https://kp.org/fresno.json"),
+    ("Kaiser Foundation Hospital - Anaheim", "https://kp.org/anaheim.json"),
+    ("Kaiser Foundation Hospital - Roseville", "https://kp.org/roseville.json"),
+]
+
+
+def test_the_city_tells_one_facility_of_a_system_from_another():
+    """California produced 98 ambiguous rows against 15 for four midwest states.
+
+    A large system's facilities differ by place, not by name. Comparing names
+    alone scores every "Kaiser Foundation Hospital" identically and correctly
+    refuses to choose; the city is the fact that makes an answer possible.
+    """
+
+    records = _records(KAISER)
+
+    assert not match_location("KAISER FOUNDATION HOSPITAL", records).is_confident
+
+    match = match_location("KAISER FOUNDATION HOSPITAL", records, city="Fresno")
+    assert match.is_confident
+    assert match.record.mrf_url.endswith("fresno.json")
+
+
+def test_a_city_nobody_lists_still_refuses_to_guess():
+    records = _records(KAISER)
+    assert not match_location("KAISER FOUNDATION HOSPITAL", records,
+                              city="Bakersfield").is_confident
+
+
+def test_two_facilities_in_one_city_are_still_ambiguous():
+    """The city separates Kaiser Fresno from Kaiser Anaheim. It cannot separate
+    two hospitals a system runs in the same place."""
+
+    records = _records([
+        ("Sutter Health Sacramento Midtown", "https://x.org/a.json"),
+        ("Sutter Health Sacramento Downtown", "https://x.org/b.json"),
+    ])
+    assert not match_location("SUTTER HEALTH", records, city="Sacramento").is_confident
+
+
+def test_the_city_never_overrides_a_clear_name_match():
+    records = _records([
+        ("Mercy Hospital Joplin", "https://x.org/joplin.json"),
+        ("Mercy Hospital Springfield", "https://x.org/springfield.json"),
+    ])
+
+    match = match_location("MERCY HOSPITAL JOPLIN", records, city="Springfield")
+    assert match.record.mrf_url.endswith("joplin.json")
+
+
+def test_a_hospital_with_no_city_on_record_behaves_as_before():
+    records = _records(SYSTEM)
+    assert match_location("HCA HEALTHONE SKY RIDGE", records, city=None).is_confident
+
+
+def test_the_city_reaches_the_matcher_from_the_hospital_record():
+    body = "".join(f"Location-Name: {n}\nMRF-URL: {u}\n" for n, u in KAISER)
+    fetch = _fetcher({"https://kp.org/cms-hpt.txt": body})
+
+    (row,) = discover_one(
+        {"ccn": "050515", "name": "KAISER FOUNDATION HOSPITAL", "state": "CA",
+         "city": "Fresno", "website": "https://kp.org"},
+        fetch,
+    )
+
+    assert row.status == "found"
+    assert row.mrf_url.endswith("fresno.json")

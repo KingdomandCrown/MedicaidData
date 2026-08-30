@@ -137,7 +137,36 @@ class Match:
         return self.record is not None and self.score >= MATCH_THRESHOLD
 
 
-def match_location(hospital_name: str | None, records: list[HptRecord]) -> Match:
+def _score(hospital_name: str | None, city: str | None, record: HptRecord) -> float:
+    """How well one block matches, with the city counted if we know it.
+
+    A large system's facilities differ by place, not by name: Kaiser publishes
+    dozens of "Kaiser Foundation Hospital" blocks and the word that separates
+    them is Fresno or Anaheim. Comparing the name alone scores every one of
+    them identically and correctly refuses to choose. Adding the city is what
+    turns "no idea" into an answer.
+
+    The higher of the two scores wins, so a location-name that omits the city
+    is not penalised for it.
+    """
+
+    plain = name_similarity(hospital_name, record.location_name)
+    if not city:
+        return plain
+    return max(plain, name_similarity(f"{hospital_name} {city}", record.location_name))
+
+
+def _names_the_city(record: HptRecord, city: str | None) -> bool:
+    if not city:
+        return False
+    return bool(significant_tokens(city) & significant_tokens(record.location_name))
+
+
+def match_location(
+    hospital_name: str | None,
+    records: list[HptRecord],
+    city: str | None = None,
+) -> Match:
     """Pick the block belonging to one hospital.
 
     A file with a single block needs no matching — a hospital publishing one
@@ -152,16 +181,25 @@ def match_location(hospital_name: str | None, records: list[HptRecord]) -> Match
         return Match(usable[0], 1.0)
 
     scored = sorted(
-        ((name_similarity(hospital_name, r.location_name), r) for r in usable),
+        ((_score(hospital_name, city, r), r) for r in usable),
         key=lambda pair: -pair[0],
     )
     best_score, best = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
 
     # A tie between two facilities is not a match, however high it scores. On a
-    # system domain the runner-up is a different real hospital.
-    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+    # system domain the runner-up is a different real hospital — unless exactly
+    # one of the tied blocks names this hospital's city, which is precisely the
+    # fact that tells Kaiser Fresno from Kaiser Anaheim.
     if best_score >= MATCH_THRESHOLD and best_score > runner_up:
         return Match(best, best_score, [r for _, r in scored[1:]])
+
+    if best_score >= MATCH_THRESHOLD and city:
+        tied = [r for score, r in scored if score >= best_score - 1e-9]
+        naming = [r for r in tied if _names_the_city(r, city)]
+        if len(naming) == 1:
+            rest = [r for _, r in scored if r is not naming[0]]
+            return Match(naming[0], best_score, rest)
 
     return Match(None, best_score, [r for _, r in scored])
 
@@ -232,6 +270,7 @@ def discover_one(
     name = str(hospital.get("name") or "").strip()
     state = hospital.get("state")
     website = hospital.get("website")
+    city = hospital.get("city")
     base = Discovery(ccn=ccn, name=name, state=state, website=website)
 
     root = site_root(website)
@@ -264,7 +303,7 @@ def discover_one(
         base.note = f"no readable cms-hpt.txt at {root}"
         return [base]
 
-    match = match_location(name, records)
+    match = match_location(name, records, hospital.get("city"))
     if match.is_confident:
         base.status = "found"
         base.mrf_url = _absolute(match.record.mrf_url, page or f"https://{root}/")

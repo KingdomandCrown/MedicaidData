@@ -163,5 +163,5 @@ def test_targets_carry_what_discovery_needs(engine):
     _hospital(engine, "170027", "PRATT REGIONAL MEDICAL CENTER", "KS")
     target = choose_targets(engine, WEB).targets[0].as_dict()
 
-    assert set(target) == {"ccn", "name", "state", "website"}
+    assert set(target) == {"ccn", "name", "state", "city", "website"}
     assert target["website"] == "https://prmc.org"
