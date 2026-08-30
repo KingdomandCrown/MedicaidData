@@ -48,6 +48,7 @@ SUGGESTION_COLUMNS = (
     "ccn",
     "hospital",
     "state",
+    "state_known",
     "charge_rows",
     "score",
     "source_file",
@@ -74,6 +75,10 @@ def suggest_rows(engine: Engine, *, limit: int | None = None) -> list[dict]:
             "ccn": m.ccn,
             "hospital": m.hospital,
             "state": m.state or "",
+            # "yes" means the file named a state and this hospital is in it.
+            # "no" means the file named none, so the name is all there is --
+            # and a hospital name is not unique across states.
+            "state_known": "yes" if m.same_state else "no",
             "charge_rows": m.charge_count,
             "score": f"{m.score:.3f}",
             "source_file": m.source_file,

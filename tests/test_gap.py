@@ -489,3 +489,62 @@ def test_the_biggest_recoverable_files_come_first(engine):
     )
 
     assert build_gap_report(engine).probable[0].ccn == "060112"
+
+
+def test_a_hospital_in_another_state_is_never_offered(engine):
+    """The sheet proposed an Arkansas rehab hospital for a Houston file, and
+    St. Francis hospitals in Delaware, Illinois and Minnesota for one published
+    in New York. Every one scored well. Every one was wrong.
+
+    A hospital's name is not unique; its name and state very nearly are.
+    """
+
+    _put(
+        engine,
+        [
+            _hospital("080003", "St Francis Hospital", "DE"),
+            _hospital("141350", "St Francis Hospital", "IL"),
+            _hospital("330404", "St Francis Hospital and Heart Center", "NY"),
+        ],
+        [_source("112050523_st-francis-hospital-heart-center.json",
+                 "St. Francis Hospital", "NY", count=3_859_630)],
+    )
+
+    matches = build_gap_report(engine).probable
+
+    assert {m.state for m in matches} == {"NY"}
+    assert matches[0].ccn == "330404"
+    assert matches[0].same_state is True
+
+
+def test_a_source_with_no_state_still_gets_candidates(engine):
+    """There is nothing else to go on — but the reviewer is told which kind of
+    guess they are looking at."""
+
+    _put(
+        engine,
+        [_hospital("080003", "St Francis Hospital", "DE")],
+        [_source("st-francis.json", "St. Francis Hospital", None, count=100)],
+    )
+
+    matches = build_gap_report(engine).probable
+    assert len(matches) == 1
+    assert matches[0].same_state is False
+
+
+def test_a_freestanding_er_no_longer_drags_in_three_states(engine):
+    """84-1321373_HCA-HEALTHONE-SOUTHWEST-ER proposed Southwest hospitals in
+    Colorado, Kansas and Mississippi. It is a Colorado ER with no CCN at all."""
+
+    _put(
+        engine,
+        [
+            _hospital("061327", "Southwest Memorial Hospital", "CO"),
+            _hospital("170068", "Southwest Medical Center", "KS"),
+            _hospital("250097", "Southwest MS Regional Medical Center", "MS"),
+        ],
+        [_source("84-1321373_HCA-HEALTHONE-SOUTHWEST-ER.json",
+                 "HCA HEALTHONE SOUTHWEST ER", "CO", count=2_997_164)],
+    )
+
+    assert {m.state for m in build_gap_report(engine).probable} == {"CO"}

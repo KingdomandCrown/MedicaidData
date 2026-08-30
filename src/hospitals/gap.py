@@ -157,6 +157,9 @@ class ProbableMatch:
     file_hospital_name: str | None
     charge_count: int
     score: float
+    #: True when the file named a state and this hospital is in it. False means
+    #: the file named no state, so the name is the only evidence there is.
+    same_state: bool = False
 
 
 @dataclass
@@ -276,6 +279,18 @@ def probable_matches(
     and the facility in its filename, which is how "Mercy Medical Center -
     Williston" ends up looking like nothing at all.
 
+    **A hospital's name is not unique; its name and state very nearly are.**
+    Matching on the name alone offered an Arkansas rehabilitation hospital for
+    a Houston file, and St. Francis hospitals in Delaware, Illinois and
+    Minnesota for one published in New York. Every one of those scored well,
+    and every one was wrong. So when a source names a state, only hospitals in
+    that state are candidates: a suggestion that cannot possibly be right is
+    worse than no suggestion, because somebody has to read it.
+
+    A source with no state on record still gets cross-state candidates -- there
+    is nothing else to go on -- but they are marked, so the reviewer knows which
+    kind of guess they are looking at.
+
     Bucketed by first significant token so this stays linear-ish; comparing
     every orphan against all 6,411 gaps would otherwise be minutes of work to
     produce a list nobody waits for.
@@ -289,10 +304,13 @@ def probable_matches(
     matches: list[ProbableMatch] = []
     for source in unattributed:
         haystacks = [source.hospital_name or "", _readable(source.source_file)]
+        state = (source.state or "").strip().upper() or None
         candidates: dict[str, tuple[HospitalGap, float]] = {}
         for haystack in haystacks:
             for token in significant_tokens(haystack):
                 for gap in by_token.get(token, ()):
+                    if state and (gap.state or "").upper() != state:
+                        continue
                     score = max(
                         name_similarity(haystack, gap.name),
                         candidates.get(gap.ccn, (None, 0.0))[1],
@@ -311,6 +329,7 @@ def probable_matches(
                     file_hospital_name=source.hospital_name,
                     charge_count=source.charge_count,
                     score=round(score, 3),
+                    same_state=bool(state),
                 )
             )
 
@@ -610,6 +629,7 @@ def write_xlsx(report: GapReport, path: str) -> str:
             "Name inside that file",
             "Charge rows",
             "Confidence",
+            "Same state",
         ],
         [
             [
@@ -620,6 +640,7 @@ def write_xlsx(report: GapReport, path: str) -> str:
                 m.file_hospital_name or "",
                 m.charge_count,
                 m.score,
+                "yes" if m.same_state else "no",
             ]
             for m in report.probable
         ],
