@@ -355,7 +355,7 @@ def test_the_failure_names_the_titles_cms_is_actually_publishing():
     from hospitals import cms_pos
 
     payload = {"dataset": [
-        {"title": "Provider of Services File Extract", "identifier": "a",
+        {"title": "Hospital Service Area File 2024", "identifier": "a",
          "distribution": [{"downloadURL": "x.pdf", "mediaType": "application/pdf"}]},
         {"title": "Medicare Enrollment", "identifier": "b"},
     ]}
@@ -365,13 +365,53 @@ def test_the_failure_names_the_titles_cms_is_actually_publishing():
     with pytest.raises(LookupError) as excinfo:
         cms_pos.discover_latest_distribution(
             session=session,
-            dataset_title="Something Nobody Publishes",
+            dataset_title="Hospital Service Area",
             catalogs=((url, None, "dcat"),),
         )
 
     message = str(excinfo.value)
-    assert "Provider of Services File Extract" in message
+    assert "Hospital Service Area File 2024" in message
     assert "Medicare Enrollment" not in message
+
+
+def test_asking_for_another_dataset_never_falls_back_to_the_pos_file():
+    """The loose tier is a POS convenience, and a trap for every other caller.
+
+    Handing back the Provider of Services file to something that asked for
+    patient origins would not fail -- it would load hospitals into the wrong
+    table and report success.
+    """
+
+    from hospitals import cms_pos
+
+    items = [
+        {"title": "Provider of Services File - Hospital & Non-Hospital", "identifier": "a"},
+    ]
+    assert cms_pos._matching_datasets(items, "Hospital Service Area File") == []
+    # ...while the POS caller still gets its loose match.
+    assert cms_pos._matching_datasets(items, cms_pos.POS_DATASET_TITLE) == items
+
+
+def test_a_single_shared_word_is_not_a_near_miss():
+    """Otherwise "hospital" suggests half the CMS catalog."""
+
+    from hospitals import cms_pos
+
+    payload = [{"title": "Hospital Readmissions Reduction Program", "identifier": "a"}]
+    assert cms_pos._near_miss_titles(payload, "Hospital Service Area File") == []
+
+
+def test_near_misses_are_offered_closest_first():
+    from hospitals import cms_pos
+
+    payload = [
+        {"title": "Service Area Something", "identifier": "a"},
+        {"title": "Hospital Service Area File 2024", "identifier": "b"},
+    ]
+    assert cms_pos._near_miss_titles(payload, "Hospital Service Area File") == [
+        "Hospital Service Area File 2024",
+        "Service Area Something",
+    ]
 
 
 def test_near_miss_titles_read_both_catalog_shapes():

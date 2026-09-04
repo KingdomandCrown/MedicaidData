@@ -178,6 +178,14 @@ def _matching_datasets(items, dataset_title: str) -> list[dict]:
     word of ours (so an added "Q1 2026" still matches); and finally any title
     carrying the core phrase. Each step gives up a little precision, so the
     order matters — a stricter match is never passed over for a looser one.
+
+    That last tier only applies when the *caller* asked for a Provider of
+    Services file. It was written when this module served one dataset, and it
+    is a trap for any other: asking for Hospital Service Area and getting the
+    POS file back would not fail, it would load hospitals into a table meant
+    for patient origins and report success. A caller looking for something
+    else gets nothing here and a LookupError naming what CMS does publish,
+    which is the answer they can act on.
     """
 
     exact = [it for it in items if it.get("title") == dataset_title]
@@ -206,14 +214,29 @@ def _matching_datasets(items, dataset_title: str) -> list[dict]:
         fewest = min(len(extra) for _it, extra in supersets)
         return [it for it, extra in supersets if len(extra) == fewest]
 
-    return [it for it, norm in normalized if POS_TITLE_CORE in norm]
+    if POS_TITLE_CORE in target:
+        return [it for it, norm in normalized if POS_TITLE_CORE in norm]
+    return []
 
 
-def _near_miss_titles(payload) -> list[str]:
-    """Titles that mention the core phrase, for a failure message.
+#: Words too common in CMS dataset titles to suggest anything by themselves.
+_TITLE_STOPWORDS = frozenset(
+    "file files data dataset of and the by for cms medicare public use".split()
+)
+
+
+def _title_terms(title: str | None) -> set[str]:
+    return {w for w in _normalize_title(title).split() if w not in _TITLE_STOPWORDS}
+
+
+def _near_miss_titles(payload, dataset_title: str = POS_DATASET_TITLE) -> list[str]:
+    """Published titles that resemble the one asked for, for a failure message.
 
     When nothing matches, the useful thing is not that the search failed but
-    what CMS is calling the dataset now.
+    what CMS is calling the dataset now — they rename these between editions,
+    and the new name is the whole fix. Matched on shared distinguishing words
+    rather than a fixed phrase, so this answers for any dataset the package
+    looks up, not only the POS file.
     """
 
     if isinstance(payload, dict):
@@ -223,15 +246,23 @@ def _near_miss_titles(payload) -> list[str]:
     else:
         return []
 
-    return sorted(
-        {
-            it.get("title")
-            for it in items
-            if isinstance(it, dict)
-            and POS_TITLE_CORE in _normalize_title(it.get("title"))
-            and it.get("title")
-        }
-    )
+    wanted = _title_terms(dataset_title)
+    if not wanted:
+        return []
+
+    # One shared word is not a resemblance — "hospital" alone would suggest
+    # half the catalog. Two, or everything we asked for when we asked for one.
+    need = min(2, len(wanted))
+    scored: dict[str, int] = {}
+    for it in items:
+        if not isinstance(it, dict) or not it.get("title"):
+            continue
+        overlap = len(_title_terms(it.get("title")) & wanted)
+        if overlap >= need:
+            scored[it["title"]] = max(overlap, scored.get(it["title"], 0))
+
+    # Closest first: the reader usually wants the top one, not an alphabet.
+    return sorted(scored, key=lambda t: (-scored[t], t))
 
 
 def _from_dkan(payload, dataset_title: str, catalog: str) -> list[PosDistribution]:
@@ -321,7 +352,9 @@ def discover_latest_distribution(
 
     sess = _session(session)
     attempts: list[str] = []
-    near_miss: set[str] = set()
+    # A list, not a set: _near_miss_titles returns closest-first and the
+    # suggestion is only useful if the best one survives to the message.
+    near_miss: list[str] = []
     reachable = False
 
     for url, params, shape in catalogs:
@@ -335,10 +368,11 @@ def discover_latest_distribution(
         reachable = True
         candidates = _SHAPES[shape](payload, dataset_title, url)
         if not candidates:
-            near = _near_miss_titles(payload)
-            near_miss.update(near)
+            near = _near_miss_titles(payload, dataset_title)
+            near_miss += [t for t in near if t not in near_miss]
             attempts.append(
-                f"{url}: reachable, but no usable POS distribution"
+                f"{url}: reachable, but no distribution matching "
+                f"{dataset_title!r}"
                 + (f" (closest titles: {'; '.join(near[:3])})" if near else "")
             )
             continue
@@ -364,7 +398,7 @@ def discover_latest_distribution(
                     "; ".join(alternatives),
                 )
         log.info(
-            "Latest POS distribution: %s (modified=%s, %s)",
+            "Latest distribution: %s (modified=%s, %s)",
             latest.title,
             latest.modified,
             f"id={latest.distribution_id}"
@@ -379,11 +413,11 @@ def discover_latest_distribution(
     hint = ""
     if near_miss:
         hint = (
-            " CMS appears to publish it under a different title now; set "
-            "POS_DATASET_TITLE to one of: " + "; ".join(sorted(near_miss)[:5])
+            " CMS appears to publish it under a different title now; pass "
+            "dataset_title= as one of: " + "; ".join(near_miss[:5])
         )
     raise LookupError(
-        f"POS dataset {dataset_title!r} not found in any CMS catalog — {detail}.{hint}"
+        f"Dataset {dataset_title!r} not found in any CMS catalog — {detail}.{hint}"
     )
 
 

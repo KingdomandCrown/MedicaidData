@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
     func,
@@ -122,6 +123,31 @@ npi_ccn_crosswalk = Table(
     Column("name", String(255)),
     Column("source", String(64)),
     Column("loaded_at", DateTime),
+)
+
+# Where a hospital's patients come from: one row per hospital x patient ZIP,
+# from CMS's Hospital Service Area File. Keyed by CCN, so it joins straight to
+# ``hospitals`` with no crosswalk in between.
+#
+# ``cases`` is NULL and ``suppressed`` true where CMS withheld the cell for
+# being too small to publish. That distinction is the whole point of the
+# column: a suppressed cell read as a zero says the hospital serves nobody in
+# that ZIP, which is the opposite of what it means, and it happens most in the
+# rural hospitals whose small volumes matter most.
+hospital_service_area = Table(
+    "hospital_service_area",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ccn", String(6), index=True, nullable=False),
+    Column("zip5", String(5), index=True, nullable=False),
+    Column("edition", String(64), index=True),
+    Column("cases", Integer),
+    Column("days", Integer),
+    Column("charges", Numeric(16, 2)),
+    Column("suppressed", Boolean, nullable=False, default=False),
+    Column("source", String(64)),
+    Column("loaded_at", DateTime),
+    UniqueConstraint("ccn", "zip5", "edition", name="uq_hsa_ccn_zip_edition"),
 )
 
 # One row per item x payer x plan standard-charge fact.

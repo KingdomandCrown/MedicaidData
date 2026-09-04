@@ -50,6 +50,12 @@ from .logging_config import configure_logging, get_logger
 from .price import price_for_code
 from .repair import backfill_npis, repair_eins
 from .scan import human_bytes, scan_for_ingested, write_listing
+from .service_area import (
+    competitors,
+    draw_area,
+    fetch_service_area,
+    hospital_label,
+)
 
 log = get_logger(__name__)
 
@@ -424,6 +430,37 @@ def build_parser() -> argparse.ArgumentParser:
     xwalk.add_argument("path", help="CSV with 'npi' and 'ccn' columns.")
     xwalk.add_argument("--database-url", default=DEFAULT_DB_URL)
     xwalk.add_argument("--source", default="manual", help="Provenance label.")
+
+    fetchsa = sub.add_parser(
+        "fetch-service-area",
+        help="Download CMS Hospital Service Area (where each hospital's "
+        "patients come from).",
+    )
+    fetchsa.add_argument("--database-url", default=DEFAULT_DB_URL)
+    fetchsa.add_argument(
+        "--dataset-title",
+        default=None,
+        help="CMS dataset to read (default: Hospital Service Area File).",
+    )
+    fetchsa.add_argument(
+        "--all-providers",
+        action="store_true",
+        help="Keep providers absent from the POS roster too. Off by default: "
+        "those rows join to no hospital and no query can reach them.",
+    )
+    fetchsa.add_argument(
+        "--limit", type=int, default=None, help="Stop after N rows (smoke testing)."
+    )
+
+    area = sub.add_parser(
+        "service-area",
+        help="Show where one hospital's patients come from, and who competes.",
+    )
+    area.add_argument("ccn", help="The hospital's CCN, e.g. 170027.")
+    area.add_argument("--database-url", default=DEFAULT_DB_URL)
+    area.add_argument(
+        "--limit", type=int, default=15, help="ZIPs and rivals to show (default: 15)."
+    )
 
     return parser
 
@@ -1211,6 +1248,87 @@ def _cmd_fetch_crosswalk(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_service_area(args: argparse.Namespace) -> int:
+    from .service_area import HSA_DATASET_TITLE
+
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    summary = fetch_service_area(
+        engine,
+        dataset_title=args.dataset_title or HSA_DATASET_TITLE,
+        known_ccns_only=not args.all_providers,
+        limit=args.limit,
+    )
+
+    print(
+        f"\nLoaded {summary.loaded:,} hospital x ZIP row(s) for "
+        f"{summary.hospitals_covered:,} hospital(s) from {summary.source_title} "
+        f"({summary.source_modified}), {summary.rows_read:,} rows read."
+    )
+    if summary.suppressed:
+        print(
+            f"{summary.suppressed:,} cell(s) were suppressed by CMS for being too "
+            "small to publish.\nThey are stored as suppressed, not as zero — a "
+            "zero would say the hospital\nserves nobody in that ZIP, which is the "
+            "opposite of what CMS meant."
+        )
+    if summary.unknown_ccns:
+        print(
+            f"{len(summary.unknown_ccns):,} provider(s) in the file are not in the "
+            "POS roster and were skipped\n(pass --all-providers to keep them)."
+        )
+    if summary.unusable:
+        print(f"{summary.unusable:,} row(s) had no usable provider number or ZIP.")
+    print(
+        "\nThis is Medicare fee-for-service inpatient only. Medicare Advantage is\n"
+        "more than half of Medicare enrollment and is absent, so shares computed\n"
+        "from it are shares of FFS, not of the market."
+    )
+    print("\nNow look at one:  hospitals service-area <ccn> --database-url <url>")
+    return 0
+
+
+def _cmd_service_area(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+
+    label = hospital_label(engine, args.ccn)
+    draw = draw_area(engine, args.ccn, limit=args.limit)
+
+    if not draw:
+        print(f"\nNo patient-origin data for {label}.")
+        print(
+            "Either the service area file has not been loaded "
+            "(hospitals fetch-service-area),\nor every cell for this hospital was "
+            "suppressed — which is itself a finding for a\nsmall rural hospital, "
+            "not an absence of patients."
+        )
+        return 0
+
+    total = sum(d.cases for d in draw)
+    print(f"\n{label} — {total:,} Medicare FFS inpatient case(s) in the top "
+          f"{len(draw)} ZIP(s)\n")
+    print(f"  {'ZIP':<8}{'Cases':>9}{'ZIP total':>12}{'Share':>9}")
+    for d in draw:
+        print(f"  {d.zip5:<8}{d.cases:>9,}{d.zip_total:>12,}{d.share:>8.1%}")
+
+    rivals = competitors(engine, args.ccn, limit=args.limit)
+    if rivals:
+        print("\nOther hospitals serving those ZIPs:\n")
+        print(f"  {'CCN':<8}{'Cases here':>12}{'ZIPs':>7}  Hospital")
+        for c in rivals:
+            name = c.name or "(not in the POS roster)"
+            state = f" [{c.state}]" if c.state else ""
+            print(f"  {c.ccn:<8}{c.overlap_cases:>12,}{c.shared_zips:>7}  {name}{state}")
+
+    print(
+        "\nShares are of Medicare fee-for-service inpatient cases. Medicare "
+        "Advantage\nis not in this file, and its penetration varies widely by "
+        "county."
+    )
+    return 0
+
+
 def _cmd_load_crosswalk(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     try:
@@ -1291,6 +1409,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_fetch_crosswalk(args)
     if args.command == "load-crosswalk":
         return _cmd_load_crosswalk(args)
+    if args.command == "fetch-service-area":
+        return _cmd_fetch_service_area(args)
+    if args.command == "service-area":
+        return _cmd_service_area(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 
