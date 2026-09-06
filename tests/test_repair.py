@@ -135,7 +135,7 @@ def test_correct_eins_are_left_alone(engine):
     assert find_ein_mismatches(engine) == []
 
 
-def test_a_dry_run_writes_nothing(engine):
+def test_repair_eins_dry_run_writes_nothing(engine):
     _load(engine, [(ATRIUM_NPI_ONLY, "166934899", 3)])
 
     summary = repair_eins(engine)
@@ -234,7 +234,7 @@ def test_a_file_with_no_npi_takes_it_from_the_filename(engine):
     assert _stored(engine)[DIGNITY][1] == "1770626426"
 
 
-def test_a_dry_run_writes_nothing(engine):
+def test_backfill_npis_dry_run_writes_nothing(engine):
     from hospitals.repair import backfill_npis
 
     _load_source(engine, DIGNITY)
