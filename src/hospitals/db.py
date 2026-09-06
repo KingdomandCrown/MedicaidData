@@ -150,6 +150,77 @@ hospital_service_area = Table(
     UniqueConstraint("ccn", "zip5", "edition", name="uq_hsa_ccn_zip_edition"),
 )
 
+# What a hospital said its community needs, and which needs it declined.
+#
+# ``ccn`` is filled the same way charge files are attributed, and by the same
+# rule: an inferred link and a person's decision must stay distinguishable, so
+# ``link_method`` records which it was.
+chna_documents = Table(
+    "chna_documents",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("source_file", String(255), nullable=False, unique=True),
+    Column("ccn", String(6), index=True),
+    Column("hospital_name", String(255)),
+    Column("county", String(128)),
+    Column("state", String(2), index=True),
+    Column("year", Integer, index=True),
+    Column("cycle_label", String(32)),      # "Round #5", "Wave #4"
+    Column("consultant", String(32)),
+    Column("townhall_date", String(16)),
+    Column("attendees", Integer),
+    Column("total_votes", Integer),
+    # How many needs were declined with the template social-determinant
+    # sentence rather than a reason the hospital actually wrote.
+    Column("boilerplate_declines", Integer),
+    Column("link_method", String(16)),
+    Column("ingested_at", DateTime),
+)
+
+# The ranked tables. ``table_kind`` separates this cycle's priority tally from
+# the ongoing-problem table, which is the one carrying ``prior_rank``.
+chna_needs = Table(
+    "chna_needs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "document_id",
+        Integer,
+        ForeignKey("chna_documents.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    ),
+    Column("table_kind", String(16)),       # priority | ongoing
+    Column("rank", Integer),
+    Column("label", Text),
+    Column("votes", Integer),
+    Column("pct", Numeric(5, 2)),
+    Column("accum", Numeric(5, 2)),
+    Column("prior_rank", Integer),
+    # True where the row survived only because letter-spaced text was rejoined.
+    Column("recovered", Boolean),
+)
+
+# Specialties a hospital says it is short of. ``confirmed`` stays false until a
+# person rules on it: these come from matching a specialty against a shortage
+# cue in the same sentence, which is a good heuristic and not a fact.
+chna_shortages = Table(
+    "chna_shortages",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "document_id",
+        Integer,
+        ForeignKey("chna_documents.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    ),
+    Column("specialty", String(64), index=True),
+    Column("verbatim", Text),
+    Column("recruiting", Boolean),
+    Column("confirmed", Boolean, nullable=False, default=False),
+)
+
 # One row per item x payer x plan standard-charge fact.
 standard_charges = Table(
     "standard_charges",

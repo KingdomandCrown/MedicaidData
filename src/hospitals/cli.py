@@ -452,6 +452,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=None, help="Stop after N rows (smoke testing)."
     )
 
+    chna = sub.add_parser(
+        "ingest-chna",
+        help="Load community health needs assessments (a PDF or a folder of them).",
+    )
+    chna.add_argument("path", help="A CHNA .pdf/.txt, or a directory of them.")
+    chna.add_argument("--database-url", default=DEFAULT_DB_URL)
+    chna.add_argument(
+        "--keep-existing",
+        action="store_true",
+        help="Skip files already loaded instead of replacing them.",
+    )
+
     area = sub.add_parser(
         "service-area",
         help="Show where one hospital's patients come from, and who competes.",
@@ -1288,6 +1300,50 @@ def _cmd_fetch_service_area(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ingest_chna(args: argparse.Namespace) -> int:
+    from .chna_load import load_path
+
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    summary = load_path(engine, args.path, replace=not args.keep_existing)
+
+    print(
+        f"\n{summary.files} file(s): {summary.loaded} loaded, "
+        f"{summary.attributed} attributed to a hospital."
+    )
+
+    templated = sum(1 for d in summary.documents if d.status != "unreadable")
+    if templated:
+        print(f"{len(summary.unattributed)} loaded without a hospital.")
+
+    if summary.unattributed:
+        print("\nNot attributed to any hospital (the data is held; only the join "
+              "is missing):")
+        for doc in summary.unattributed[:15]:
+            who = doc.hospital or "no hospital named in the document"
+            print(f"  {doc.source_file:<52} {who}")
+        if len(summary.unattributed) > 15:
+            print(f"  ... and {len(summary.unattributed) - 15} more")
+
+    if summary.problems:
+        print(f"\n{len(summary.problems)} file(s) could not be read:")
+        for doc in summary.problems:
+            print(f"  {doc.source_file:<52} {doc.status}")
+        if summary.scanned:
+            print(
+                f"\n{summary.scanned} of those are scans with no text layer. They "
+                "need OCR,\nwhich is a different job with a different cost — they "
+                "are not silently\nloaded as empty documents."
+            )
+
+    print(
+        "\nRanked needs come from a table and are facts about the document.\n"
+        "Shortages come from a heuristic and load unconfirmed; a person still "
+        "has to rule on them."
+    )
+    return 0
+
+
 def _cmd_service_area(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     require_schema(engine, args.database_url)
@@ -1413,6 +1469,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_fetch_service_area(args)
     if args.command == "service-area":
         return _cmd_service_area(args)
+    if args.command == "ingest-chna":
+        return _cmd_ingest_chna(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 

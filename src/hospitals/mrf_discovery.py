@@ -270,7 +270,6 @@ def discover_one(
     name = str(hospital.get("name") or "").strip()
     state = hospital.get("state")
     website = hospital.get("website")
-    city = hospital.get("city")
     base = Discovery(ccn=ccn, name=name, state=state, website=website)
 
     root = site_root(website)
