@@ -157,6 +157,28 @@ class Strategy:
         return self.committed_dollars == self.stated_total_dollars
 
 
+def _is_costed_row(line: str, cost: re.Match) -> bool:
+    """Whether a line ending in a dollar figure is a costed commitment.
+
+    The Wyandotte County assessment charts household income, and its axis
+    labels extract as a column of bare amounts -- ``$700``, ``$750``, ``$800``
+    -- each of which ends a line with a dollar figure and nothing else. Read
+    as commitments they summed to $123,100 of promises that hospital never
+    made, next to a real total of zero. A number that looks like a budget and
+    is not is worse than no number.
+
+    A real row from these plans carries a timeframe or an hour count beside
+    the money. Failing both, it needs enough words to be a description and a
+    verb that makes it a promise.
+    """
+
+    if cost.group(1) or cost.group(2):      # a timeframe or an hour count
+        return True
+    prefix = line[: cost.start()]
+    letters = sum(ch.isalpha() for ch in prefix)
+    return letters >= 12 and _is_commitment_sentence(line)
+
+
 def _is_commitment_sentence(sentence: str) -> bool:
     lowered = f" {sentence.lower()} "
     if any(cue in lowered for cue in _DESCRIPTIVE):
@@ -225,7 +247,7 @@ def parse_strategy(text: str) -> Strategy:
             continue
 
         cost = _COST_TAIL.search(stripped)
-        if cost and _MONEY.search(stripped):
+        if cost and _MONEY.search(stripped) and _is_costed_row(stripped, cost):
             letter = None
             tactic = _TACTIC.match(stripped)
             if tactic:

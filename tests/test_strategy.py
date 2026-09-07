@@ -247,3 +247,30 @@ def test_fiscal_year_columns_are_captured_where_present():
     only = parse_strategy("Launch training. FY 2025 FY 2026 Ongoing 2 $500").commitments[0]
 
     assert only.fiscal_years == ["2025", "2026"]
+
+
+# --- a chart is not a budget ------------------------------------------------
+
+
+def test_a_bare_dollar_amount_on_its_own_line_is_not_a_commitment():
+    """The Wyandotte County assessment charts household income, and its axis
+    labels extract as a column of bare amounts. Read as commitments they
+    summed to $123,100 of promises nobody made."""
+
+    axis = "\n".join(f"${n}" for n in (700, 750, 800, 850, 900, 950, 1000))
+    assert parse_strategy(axis).commitments == []
+
+
+def test_a_costed_row_with_a_timeframe_survives_the_same_guard():
+    assert parse_strategy("Ongoing 4 $320").commitments[0].dollars == 320
+
+
+def test_a_wrapped_row_keeping_only_its_hours_survives():
+    """'2027 - Year 3' wraps, leaving '3 8 $640' -- hours are what identify it."""
+
+    only = parse_strategy("3 8 $640").commitments[0]
+    assert (only.hours, only.dollars) == (8, 640)
+
+
+def test_a_described_amount_with_no_promise_in_it_is_not_a_commitment():
+    assert parse_strategy("residents with an income less than $35,000").commitments == []
