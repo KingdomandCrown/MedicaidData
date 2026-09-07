@@ -475,7 +475,10 @@ _SPECIALTIES: dict[str, tuple[str, ...]] = {
     "psychiatry": ("psychiatry", "psychiatrist", "psychiatric"),
     "cardiology": ("cardiology", "cardiologist", "cardiac"),
     "oncology": ("oncology", "oncologist"),
-    "obstetrics": ("obstetrics", "obstetrician", "ob/gyn", "obgyn", "prenatal care"),
+    # Not "prenatal care": every one of these documents reports the share of
+    # births with first-trimester prenatal care as a health indicator, which is
+    # a utilisation statistic and not a statement about staffing.
+    "obstetrics": ("obstetrics", "obstetrician", "ob/gyn", "obgyn", "gynecology"),
     "general surgery": ("general surgery", "general surgeon"),
     "anesthesiology": ("anesthesiology", "anesthetist", "crna"),
     "radiology": ("radiology", "radiologist"),
@@ -503,8 +506,13 @@ _SHORTAGE_CUES = (
     "shortage", "lack of", "lacking", "unable to recruit", "difficult to recruit",
     "recruit", "recruitment", "need for additional", "additional",
     "without a", "vacancy", "vacancies", "staffing", "retention", "turnover",
-    "access to visiting", "visiting specialist",
 )
+# Deliberately not "visiting specialist": these documents print a roster of the
+# visiting specialists a hospital already has, under a heading using those exact
+# words, and it sits pages from the complaint about lacking them. As a cue it
+# reported Cheyenne County short of anesthesiology on the strength of the
+# anesthetist who visits every three weeks. "Lack of Visiting Specialists: Derm,
+# Ped, ..." still lands, because "lack of" is doing the work there anyway.
 
 _WORD_BOUNDARY = "[^a-z]"
 
@@ -539,36 +547,73 @@ class Shortage:
     recruiting: bool = False
 
 
-def find_shortages(text: str, *, context: int = 220) -> list[Shortage]:
-    """Specialties named in a sentence that says they are short of one.
+#: How close a shortage cue must sit to the specialty it is about.
+#:
+#: Sentence boundaries were the first attempt and they do not exist in these
+#: documents. A CHNA is mostly tables, tables carry no full stops, and the
+#: "sentence" that results is a page. Within a page-long span some cue always
+#: appears near some specialty, so the extractor reported a hospital short of
+#: anesthesiology on the strength of "Keith Gist, CRNA" -- a roster of the
+#: visiting specialists it *has* -- and short of nursing and pharmacy from a
+#: patient-satisfaction table.
+#:
+#: Proximity is the honest constraint. "Lack of Visiting Specialists: Derm,
+#: Ped, Ent, Eye, Neu, Ortho and Urol." spans about seventy characters end to
+#: end, so a window this size keeps the real thing and drops the coincidences.
+PROXIMITY = 110
 
-    Deliberately requires a shortage cue in the same sentence. A CHNA lists
-    every service the hospital *has* as well as every one it wants, and a
-    parser that matched the specialty alone would report a hospital as short
-    of the very thing it advertises.
+
+def find_shortages(text: str, *, context: int = 200) -> list[Shortage]:
+    """Specialties named close to a statement of being short of one.
+
+    A CHNA lists every service the hospital *has* alongside every one it
+    wants — often in adjacent tables — so matching a specialty alone reports
+    a hospital as short of the very thing it advertises. Requiring a cue
+    nearby is what separates "Lack of Visiting Specialists: ... Urol." from
+    "Wichita Urology, 1st and 4th Thursday", which is a urologist who already
+    visits.
     """
 
+    flat = re.sub(r"\s+", " ", dekern(str(text or "").replace("\n", " ")))
+    lowered = flat.lower()
+
+    cue_spans = [
+        (m.start(), m.end(), cue)
+        for cue in _SHORTAGE_CUES
+        for m in re.finditer(re.escape(cue), lowered)
+    ]
+    if not cue_spans:
+        return []
+    cue_spans.sort()
+
     found: dict[str, Shortage] = {}
-    for sentence in _sentences(text):
-        lowered = f" {sentence.lower()} "
-        if not any(cue in lowered for cue in _SHORTAGE_CUES):
-            continue
-        recruiting = any(
-            cue in lowered for cue in ("recruit", "recruitment", "hire", "hiring")
-        )
-        for canonical, aliases in _SPECIALTIES.items():
-            for alias in aliases:
-                if re.search(f"{_WORD_BOUNDARY}{re.escape(alias)}{_WORD_BOUNDARY}", lowered):
-                    existing = found.get(canonical)
-                    if existing is None:
-                        found[canonical] = Shortage(
-                            specialty=canonical,
-                            verbatim=sentence[:context],
-                            recruiting=recruiting,
-                        )
-                    elif recruiting and not existing.recruiting:
-                        existing.recruiting = True
-                    break
+    for canonical, aliases in _SPECIALTIES.items():
+        for alias in aliases:
+            pattern = f"{_WORD_BOUNDARY}{re.escape(alias)}{_WORD_BOUNDARY}"
+            for hit in re.finditer(pattern, lowered):
+                near = [
+                    (start, end, cue)
+                    for start, end, cue in cue_spans
+                    if start < hit.end() + PROXIMITY and end > hit.start() - PROXIMITY
+                ]
+                if not near:
+                    continue
+                recruiting = any(
+                    cue in ("recruit", "recruitment") for _s, _e, cue in near
+                )
+                low = min(min(s for s, _e, _c in near), hit.start())
+                verbatim = flat[max(0, low - 20) : low + context].strip()
+                existing = found.get(canonical)
+                if existing is None:
+                    found[canonical] = Shortage(
+                        specialty=canonical, verbatim=verbatim, recruiting=recruiting
+                    )
+                elif recruiting and not existing.recruiting:
+                    existing.recruiting = True
+                    existing.verbatim = verbatim
+                break
+            if canonical in found:
+                break
 
     return sorted(found.values(), key=lambda s: s.specialty)
 
