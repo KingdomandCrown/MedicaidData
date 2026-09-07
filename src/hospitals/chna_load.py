@@ -30,8 +30,20 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import Engine
 
-from .chna import Assessment, parse_assessment, read_document
-from .db import chna_documents, chna_needs, chna_shortages, hospitals
+from .chna import (
+    Assessment,
+    consultant_hint,
+    identify_template,
+    parse_assessment,
+    read_document,
+)
+from .db import (
+    chna_document_hospitals,
+    chna_documents,
+    chna_needs,
+    chna_shortages,
+    hospitals,
+)
 from .link import normalize_name
 from .logging_config import get_logger
 
@@ -53,6 +65,73 @@ class LoadedDocument:
     shortages: int
     status: str            # loaded | unattributed | ambiguous | scanned | unreadable
     note: str = ""
+
+
+@dataclass
+class Survey:
+    """What a folder of assessments is made of, before loading any of it.
+
+    The first question about a new state is not "what do these say" but "who
+    wrote them" — because one consultant covering forty documents is a parser
+    worth writing and forty consultants covering one each is not. Answering
+    that before building anything is the difference between a week per state
+    and a week per document.
+    """
+
+    files: int = 0
+    by_template: dict[str, int] = field(default_factory=dict)
+    by_hint: dict[str, int] = field(default_factory=dict)
+    unidentified: list[str] = field(default_factory=list)
+    scanned: list[str] = field(default_factory=list)
+    unreadable: list[str] = field(default_factory=list)
+
+    @property
+    def recognised(self) -> int:
+        return sum(self.by_template.values())
+
+
+def survey_path(path: str) -> Survey:
+    """Read a folder and report which house formats it contains."""
+
+    files = (
+        sorted(
+            os.path.join(path, name)
+            for name in os.listdir(path)
+            if name.lower().endswith(_EXTENSIONS) and not name.startswith(".")
+        )
+        if os.path.isdir(path)
+        else [path]
+    )
+
+    survey = Survey()
+    for file_path in files:
+        survey.files += 1
+        name = os.path.basename(file_path)
+        try:
+            text = read_document(file_path)
+        except ValueError as exc:
+            (survey.scanned if "OCR" in str(exc) else survey.unreadable).append(name)
+            continue
+        except Exception:
+            survey.unreadable.append(name)
+            continue
+
+        template = identify_template(text)
+        if template:
+            survey.by_template[template] = survey.by_template.get(template, 0) + 1
+            continue
+        survey.unidentified.append(name)
+        hint = consultant_hint(text)
+        if hint:
+            survey.by_hint[hint] = survey.by_hint.get(hint, 0) + 1
+
+    log.info(
+        "CHNA survey: %d file(s), %d in a recognised format, %d unidentified "
+        "(%d naming a producer), %d needing OCR, %d unreadable",
+        survey.files, survey.recognised, len(survey.unidentified),
+        sum(survey.by_hint.values()), len(survey.scanned), len(survey.unreadable),
+    )
+    return survey
 
 
 @dataclass
@@ -173,9 +252,15 @@ def load_assessment(
                     )
                 )
                 conn.execute(
+                    delete(chna_document_hospitals).where(
+                        chna_document_hospitals.c.document_id == existing
+                    )
+                )
+                conn.execute(
                     delete(chna_documents).where(chna_documents.c.id == existing)
                 )
 
+        now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
         document_id = conn.execute(
             insert(chna_documents).values(
                 source_file=source_file,
@@ -186,14 +271,26 @@ def load_assessment(
                 year=header.year,
                 cycle_label=header.cycle_label,
                 consultant=header.consultant,
+                consultant_hint=header.consultant_hint,
                 townhall_date=header.townhall_date,
                 attendees=header.attendees,
                 total_votes=header.total_votes,
                 boilerplate_declines=assessment.declines_boilerplate,
                 link_method=NAME_STATE if ccn else None,
-                ingested_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
+                ingested_at=now,
             )
         ).inserted_primary_key[0]
+
+        # The hospital it is filed under is also the first hospital it covers.
+        # Others are added by hand, or by a system roster, and this is where
+        # they go.
+        if ccn:
+            conn.execute(
+                insert(chna_document_hospitals).values(
+                    document_id=document_id, ccn=ccn,
+                    link_method=NAME_STATE, linked_at=now,
+                )
+            )
 
         needs = _need_rows(document_id, assessment)
         if needs:
@@ -221,6 +318,69 @@ def load_assessment(
         status=status,
         note="" if ccn else "no single hospital in the POS roster matches this name",
     )
+
+
+def cover_hospitals(
+    engine: Engine,
+    source_file: str,
+    ccns: list[str],
+    *,
+    link_method: str = MANUAL,
+) -> int:
+    """Record that one document also speaks for these hospitals.
+
+    A system assessment covers facilities it never names in its title, and
+    without this they stay in the gap report forever — the document is on the
+    disk and the hospital still looks unassessed.
+
+    A CCN no hospital in the POS roster has is refused rather than stored: an
+    unjoinable row here is invisible, because the hospital simply continues to
+    look uncovered and nothing says why.
+    """
+
+    with engine.begin() as conn:
+        document_id = conn.execute(
+            select(chna_documents.c.id).where(
+                chna_documents.c.source_file == source_file
+            )
+        ).scalar()
+        if document_id is None:
+            raise LookupError(f"no CHNA document loaded from {source_file!r}")
+
+        known = {r.ccn for r in conn.execute(select(hospitals.c.ccn)) if r.ccn}
+        already = {
+            r.ccn
+            for r in conn.execute(
+                select(chna_document_hospitals.c.ccn).where(
+                    chna_document_hospitals.c.document_id == document_id
+                )
+            )
+        }
+
+        rows, refused = [], []
+        now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        for raw in ccns:
+            ccn = str(raw or "").strip().upper()
+            if not ccn or ccn in already:
+                continue
+            if ccn not in known:
+                refused.append(ccn)
+                continue
+            already.add(ccn)
+            rows.append({
+                "document_id": document_id, "ccn": ccn,
+                "link_method": link_method, "linked_at": now,
+            })
+        if rows:
+            conn.execute(insert(chna_document_hospitals), rows)
+
+    if refused:
+        log.warning(
+            "CHNA: %s — %d CCN(s) not in the POS roster, not recorded: %s",
+            source_file, len(refused), ", ".join(sorted(refused)[:10]),
+        )
+    log.info("CHNA: %s now covers %d additional hospital(s)", source_file, len(rows))
+    return len(rows)
 
 
 def load_path(engine: Engine, path: str, *, replace: bool = True) -> ChnaSummary:

@@ -167,6 +167,10 @@ chna_documents = Table(
     Column("year", Integer, index=True),
     Column("cycle_label", String(32)),      # "Round #5", "Wave #4"
     Column("consultant", String(32)),
+    # Who the document says produced it, when the format is unrecognised. The
+    # raw material for the next entry in the template registry, and the answer
+    # to "what is this state's corpus actually made of".
+    Column("consultant_hint", String(64)),
     Column("townhall_date", String(16)),
     Column("attendees", Integer),
     Column("total_votes", Integer),
@@ -175,6 +179,32 @@ chna_documents = Table(
     Column("boilerplate_declines", Integer),
     Column("link_method", String(16)),
     Column("ingested_at", DateTime),
+)
+
+# Which hospitals a document actually covers.
+#
+# ``chna_documents.ccn`` is the hospital a document is filed under — the one
+# named on its title page. That is not the same as the hospitals it speaks for.
+# Mercy publishes one assessment for its whole Kansas region and posts it under
+# each facility's name; nationally, HCA, Ascension and CommonSpirit file system
+# documents covering dozens. A single CCN column silently drops every facility
+# but one, and the hospitals it dropped look like gaps forever after.
+#
+# Kept separate from the filed-under column rather than replacing it, because
+# "whose document is this" and "who does it cover" are different questions and
+# the coach needs both.
+chna_document_hospitals = Table(
+    "chna_document_hospitals",
+    metadata,
+    Column(
+        "document_id",
+        Integer,
+        ForeignKey("chna_documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("ccn", String(6), primary_key=True),
+    Column("link_method", String(16)),   # name_state | manual_review | system
+    Column("linked_at", DateTime),
 )
 
 # The ranked tables. ``table_kind`` separates this cycle's priority tally from

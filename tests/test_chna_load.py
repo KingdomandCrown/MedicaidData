@@ -243,3 +243,138 @@ def test_files_that_are_not_documents_are_ignored(engine, tmp_path):
     _write(tmp_path, "notes.csv", "a,b,c")
 
     assert load_path(engine, str(tmp_path)).files == 1
+
+
+# --- built for fifty states, not one ----------------------------------------
+
+
+def test_a_system_document_can_cover_hospitals_it_never_names(engine, tmp_path):
+    """Mercy files one assessment for a whole region. Without this the other
+    facilities stay in the gap report while the document sits on the disk."""
+
+    from hospitals.chna_load import cover_hospitals
+    from hospitals.db import chna_document_hospitals
+
+    _hospital(engine, "170027", "PATTERSON HEALTH CENTER")
+    _hospital(engine, "170055", "MERCY MOUNDRIDGE")
+    _hospital(engine, "170066", "MERCY COLUMBUS")
+    load_assessment(engine, _write(tmp_path, "system.txt", PATTERSON))
+
+    added = cover_hospitals(engine, "system.txt", ["170055", "170066"])
+
+    with engine.connect() as conn:
+        covered = {r.ccn for r in conn.execute(select(chna_document_hospitals.c.ccn))}
+
+    assert added == 2
+    assert covered == {"170027", "170055", "170066"}
+
+
+def test_the_hospital_it_is_filed_under_is_covered_automatically(engine, tmp_path):
+    from hospitals.db import chna_document_hospitals
+
+    _hospital(engine, "170027", "PATTERSON HEALTH CENTER")
+    load_assessment(engine, _write(tmp_path, "p.txt", PATTERSON))
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(chna_document_hospitals.c.ccn)).all()
+
+    assert [r.ccn for r in rows] == ["170027"]
+
+
+def test_covering_a_ccn_no_hospital_has_is_refused(engine, tmp_path):
+    """An unjoinable row here is invisible: the hospital just keeps looking
+    uncovered and nothing says why."""
+
+    from hospitals.chna_load import cover_hospitals
+
+    _hospital(engine, "170027", "PATTERSON HEALTH CENTER")
+    load_assessment(engine, _write(tmp_path, "p.txt", PATTERSON))
+
+    assert cover_hospitals(engine, "p.txt", ["999999"]) == 0
+
+
+def test_covering_the_same_hospital_twice_is_idempotent(engine, tmp_path):
+    from hospitals.chna_load import cover_hospitals
+
+    _hospital(engine, "170027", "PATTERSON HEALTH CENTER")
+    _hospital(engine, "170055", "MERCY MOUNDRIDGE")
+    load_assessment(engine, _write(tmp_path, "p.txt", PATTERSON))
+
+    assert cover_hospitals(engine, "p.txt", ["170055"]) == 1
+    assert cover_hospitals(engine, "p.txt", ["170055"]) == 0
+
+
+def test_covering_an_unknown_document_says_so(engine):
+    from hospitals.chna_load import cover_hospitals
+
+    with pytest.raises(LookupError, match="no CHNA document"):
+        cover_hospitals(engine, "never-loaded.pdf", ["170027"])
+
+
+def test_reloading_a_document_clears_its_coverage(engine, tmp_path):
+    """Otherwise a reload leaves rows pointing at a document id that is gone."""
+
+    from hospitals.chna_load import cover_hospitals
+    from hospitals.db import chna_document_hospitals
+
+    _hospital(engine, "170027", "PATTERSON HEALTH CENTER")
+    _hospital(engine, "170055", "MERCY MOUNDRIDGE")
+    path = _write(tmp_path, "p.txt", PATTERSON)
+    load_assessment(engine, path)
+    cover_hospitals(engine, "p.txt", ["170055"])
+    load_assessment(engine, path)
+
+    with engine.connect() as conn:
+        docs = {r.id for r in conn.execute(select(chna_documents.c.id))}
+        links = {r.document_id for r in conn.execute(
+            select(chna_document_hospitals.c.document_id))}
+
+    assert links <= docs
+
+
+# --- surveying a new state --------------------------------------------------
+
+
+def test_a_survey_counts_the_formats_without_loading_anything(engine, tmp_path):
+    from hospitals.chna_load import survey_path
+
+    _write(tmp_path, "p.txt", PATTERSON)
+    _write(tmp_path, "c.txt", CHEYENNE)
+    _write(tmp_path, "other.txt", "A report prepared by Tripp Umbach for the county.")
+
+    survey = survey_path(str(tmp_path))
+
+    assert survey.files == 3
+    assert survey.by_template == {"vvv": 2}
+    assert survey.unidentified == ["other.txt"]
+
+
+def test_an_unrecognised_document_reports_who_wrote_it(engine, tmp_path):
+    """The next template entry should be a fact, not a guess."""
+
+    from hospitals.chna_load import survey_path
+
+    _write(tmp_path, "x.txt", "This assessment was prepared by Verite Healthcare "
+                              "Consulting in partnership with the health department.")
+
+    assert survey_path(str(tmp_path)).by_hint == {"Verite Healthcare Consulting": 1}
+
+
+def test_a_document_naming_nobody_is_still_counted(engine, tmp_path):
+    from hospitals.chna_load import survey_path
+
+    _write(tmp_path, "x.txt", "Some report with no attribution line at all.")
+    survey = survey_path(str(tmp_path))
+
+    assert survey.unidentified == ["x.txt"]
+    assert survey.by_hint == {}
+
+
+def test_the_survey_separates_scans_from_junk(engine, tmp_path):
+    from hospitals.chna_load import survey_path
+
+    (tmp_path / "broken.pdf").write_bytes(b"not a pdf")
+    survey = survey_path(str(tmp_path))
+
+    assert survey.unreadable == ["broken.pdf"]
+    assert survey.scanned == []

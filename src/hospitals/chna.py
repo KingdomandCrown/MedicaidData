@@ -42,9 +42,44 @@ log = get_logger(__name__)
 #: Fingerprint of the template this parser is written against.
 VVV = "vvv"
 
-_VVV_MARKERS = (
-    "vvv consultants",
-    "vvv research",
+
+@dataclass(frozen=True)
+class Template:
+    """A consultant whose house format we can recognise.
+
+    Kansas is nearly one consultant. The country is not: every state has its
+    own handful, and a national build that hardcodes one of them needs a code
+    change per state. So a template is *data* — a name and the strings that
+    identify it — and adding one is a line in this tuple, not a new branch in
+    the parser.
+
+    ``tabular`` says whether the format carries the ranked vote tally this
+    module knows how to read. A recognised template without it is still worth
+    naming: it tells you which parser to write next, and how many documents
+    writing it would unlock.
+    """
+
+    name: str
+    markers: tuple[str, ...]
+    tabular: bool = False
+
+
+#: Recognised formats. Only VVV has been read closely enough to parse; the
+#: rest are named so a survey of a new state's corpus reports what it is made
+#: of rather than a single undifferentiated "unknown" pile. Add a template
+#: here the moment its name shows up in a survey — recognising a format costs
+#: nothing and tells you what the next parser is worth.
+TEMPLATES: tuple[Template, ...] = (
+    Template(VVV, ("vvv consultants", "vvv research", "vandehaar"), tabular=True),
+)
+
+# "prepared by X", "facilitated by X", "conducted by X in partnership with"
+# -- how an unrecognised document tells you who wrote it, so the next template
+# entry is a fact rather than a guess.
+_PREPARED_BY = re.compile(
+    r"(?:prepared|facilitated|conducted|completed|authored|produced)\s+"
+    r"(?:for\s+\S+\s+)?by[:\s]+([A-Z][A-Za-z0-9 ,.&'’-]{3,60})",
+    re.IGNORECASE,
 )
 
 # The IRS requires a hospital to say which identified needs it will not
@@ -134,6 +169,35 @@ def split_votes_and_pct(blob: str, total_votes: int | None) -> tuple[int, float]
 # --- the header -------------------------------------------------------------
 
 
+def identify_template(text: str) -> str | None:
+    """Which recognised house format this is, if any."""
+
+    lowered = str(text or "").lower()
+    for template in TEMPLATES:
+        if any(marker in lowered for marker in template.markers):
+            return template.name
+    return None
+
+
+def consultant_hint(text: str) -> str | None:
+    """Who wrote a document we do not recognise, in their own words.
+
+    An unknown template is only useful if it can say what it is. Nationally
+    the first question about a new state's corpus is "who produced these",
+    and the documents answer it themselves in a line near the front.
+    """
+
+    for raw in str(text or "").splitlines()[:200]:
+        match = _PREPARED_BY.search(dekern(raw))
+        if match:
+            name = re.sub(r"\s+", " ", match.group(1)).strip(" ,.")
+            # A sentence continuing past the name is not a name.
+            name = re.split(r"\b(?:in|for|on|with|and)\b", name)[0].strip(" ,.")
+            if 3 < len(name) < 60:
+                return name
+    return None
+
+
 @dataclass
 class Header:
     hospital: str | None = None
@@ -142,6 +206,9 @@ class Header:
     year: int | None = None
     cycle_label: str | None = None      # "Round #5", "Wave #4"
     consultant: str | None = None
+    #: Who the document says produced it, when the format is unrecognised.
+    #: The raw material for the next entry in TEMPLATES.
+    consultant_hint: str | None = None
     townhall_date: str | None = None
     attendees: int | None = None
     total_votes: int | None = None
@@ -171,12 +238,10 @@ def parse_header(text: str) -> Header:
 
     header = Header()
     lines = [dekern(raw) for raw in text.splitlines()[:400]]
-    lowered = text.lower()
 
-    for marker in _VVV_MARKERS:
-        if marker in lowered:
-            header.consultant = VVV
-            break
+    header.consultant = identify_template(text)
+    if header.consultant is None:
+        header.consultant_hint = consultant_hint(text)
 
     for line in lines:
         stripped = line.strip()

@@ -464,6 +464,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip files already loaded instead of replacing them.",
     )
 
+    csurvey = sub.add_parser(
+        "chna-survey",
+        help="Report which house formats a folder of assessments uses "
+        "(reads nothing into the database).",
+    )
+    csurvey.add_argument("path", help="A CHNA .pdf/.txt, or a directory of them.")
+
+    ccover = sub.add_parser(
+        "chna-cover",
+        help="Record that one assessment also covers other hospitals "
+        "(a system files one document for many facilities).",
+    )
+    ccover.add_argument("source_file", help="The document's file name, as loaded.")
+    ccover.add_argument("ccns", nargs="+", help="CCNs the document also speaks for.")
+    ccover.add_argument("--database-url", default=DEFAULT_DB_URL)
+
     area = sub.add_parser(
         "service-area",
         help="Show where one hospital's patients come from, and who competes.",
@@ -1344,6 +1360,61 @@ def _cmd_ingest_chna(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_chna_survey(args: argparse.Namespace) -> int:
+    from .chna_load import survey_path
+
+    survey = survey_path(args.path)
+
+    print(f"\n{survey.files} file(s): {survey.recognised} in a format we can parse, "
+          f"{len(survey.unidentified)} not yet.")
+
+    if survey.by_template:
+        print("\nRecognised formats:")
+        for name, count in sorted(survey.by_template.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>4}  {name}")
+
+    if survey.by_hint:
+        print("\nProducers named in documents we cannot parse yet — each of these\n"
+              "is a candidate for the template registry, ranked by what it unlocks:")
+        for name, count in sorted(survey.by_hint.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>4}  {name}")
+
+    silent = len(survey.unidentified) - sum(survey.by_hint.values())
+    if silent > 0:
+        print(f"\n{silent} unidentified document(s) name no producer at all.")
+
+    if survey.scanned:
+        print(f"\n{len(survey.scanned)} scan(s) with no text layer, needing OCR:")
+        for name in survey.scanned[:10]:
+            print(f"  {name}")
+    if survey.unreadable:
+        print(f"\n{len(survey.unreadable)} unreadable file(s):")
+        for name in survey.unreadable[:10]:
+            print(f"  {name}")
+
+    print("\nOne producer covering many documents is a parser worth writing.\n"
+          "Many producers covering one each is not — that is what this counts.")
+    return 0
+
+
+def _cmd_chna_cover(args: argparse.Namespace) -> int:
+    from .chna_load import cover_hospitals
+
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    try:
+        added = cover_hospitals(engine, args.source_file, args.ccns)
+    except LookupError as exc:
+        print(f"\n{exc}")
+        return 2
+
+    print(f"\n{args.source_file} now covers {added} additional hospital(s).")
+    refused = len(args.ccns) - added
+    if refused > 0:
+        print(f"{refused} were already recorded, or name no hospital in the POS roster.")
+    return 0
+
+
 def _cmd_service_area(args: argparse.Namespace) -> int:
     engine = make_engine(args.database_url)
     require_schema(engine, args.database_url)
@@ -1471,6 +1542,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_service_area(args)
     if args.command == "ingest-chna":
         return _cmd_ingest_chna(args)
+    if args.command == "chna-survey":
+        return _cmd_chna_survey(args)
+    if args.command == "chna-cover":
+        return _cmd_chna_cover(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 
