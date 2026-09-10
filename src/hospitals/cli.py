@@ -44,6 +44,7 @@ from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
 from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
 from .ingest import ingest_state
+from .merge_vaults import apply_merge, plan_merge, sqlite_path
 from .ingest_charges import ingest_charge_path
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
@@ -410,6 +411,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--relink",
         action="store_true",
         help="Allow changing a file that is already attributed to another hospital.",
+    )
+
+    mergev = sub.add_parser(
+        "merge-vault",
+        help="Fold another SQLite vault's price-transparency files into this one "
+        "(dry run unless --apply).",
+    )
+    mergev.add_argument("source", help="Path (or sqlite:/// URL) of the vault to pull files from.")
+    mergev.add_argument("--database-url", default=DEFAULT_DB_URL, help="The target vault.")
+    mergev.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually write (and back up the target first). Without it, only report.",
+    )
+    mergev.add_argument(
+        "--backup-dir",
+        default=None,
+        help="Where to write the pre-merge backup (default: alongside the target).",
     )
 
     fetchx = sub.add_parser(
@@ -1254,6 +1273,43 @@ def _cmd_apply_links(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_merge_vault(args: argparse.Namespace) -> int:
+    target_path = sqlite_path(args.database_url)
+    source_arg = args.source
+    source_path = sqlite_path(source_arg) if source_arg.startswith("sqlite:///") else source_arg
+
+    if not os.path.exists(target_path):
+        print(f"\nERROR: target database not found: {target_path}", file=sys.stderr)
+        return 2
+    if not os.path.exists(source_path):
+        print(f"\nERROR: source vault not found: {source_path}", file=sys.stderr)
+        return 2
+
+    if args.apply:
+        summary = apply_merge(target_path, source_path, backup_dir=args.backup_dir)
+    else:
+        summary = plan_merge(target_path, source_path)
+
+    print(
+        f"\n{len(summary.decisions)} file(s) in {source_path}: "
+        f"{len(summary.to_add)} new, {len(summary.duplicates)} already in {target_path}."
+    )
+    for d in summary.to_add[:20]:
+        print(f"  ADD   {d.source_file}  ({d.hospital_name or '?'}, {d.license_state or '?'}, "
+              f"{d.charge_count or 0:,} rows)")
+    if len(summary.to_add) > 20:
+        print(f"  ... and {len(summary.to_add) - 20} more")
+
+    if args.apply:
+        print(f"\nBacked up target to {summary.backup_path}")
+        print(f"Added {len(summary.to_add)} file(s), {summary.charge_rows_added:,} charge row(s).")
+        if summary.to_add:
+            print("\nThen:  hospitals link-charges --database-url ...   # attribute the new files")
+    elif summary.to_add:
+        print("\nDry run. Re-run with --apply to write these into the target (backs it up first).")
+    return 0
+
+
 def _cmd_fetch_crosswalk(args: argparse.Namespace) -> int:
     from .crosswalk import HOSPITAL_ENROLLMENT_TITLE
 
@@ -1530,6 +1586,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_suggest_links(args)
     if args.command == "apply-links":
         return _cmd_apply_links(args)
+    if args.command == "merge-vault":
+        return _cmd_merge_vault(args)
     if args.command == "gap-report":
         return _cmd_gap_report(args)
     if args.command == "fetch-crosswalk":
