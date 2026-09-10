@@ -1301,7 +1301,10 @@ def _cmd_merge_vault(args: argparse.Namespace) -> int:
         print(f"  ... and {len(summary.to_add) - 20} more")
 
     if args.apply:
-        print(f"\nBacked up target to {summary.backup_path}")
+        if summary.backup_path:
+            print(f"\nBacked up target to {summary.backup_path}")
+        else:
+            print("\nNothing to add — target left untouched, no backup needed.")
         print(f"Added {len(summary.to_add)} file(s), {summary.charge_rows_added:,} charge row(s).")
         if summary.to_add:
             print("\nThen:  hospitals link-charges --database-url ...   # attribute the new files")
