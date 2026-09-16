@@ -413,6 +413,25 @@ def require_schema(engine: Engine, database_url: str) -> None:
     )
 
 
+def _journal_mode() -> str:
+    """The journalling mode to ask for, WAL unless the volume cannot take it.
+
+    WAL keeps its index in a ``-shm`` file that SQLite *memory maps*. On some
+    external volumes that mapping faults on page-in, and a fault inside an mmap
+    cannot be returned as an error: the kernel raises SIGBUS and the process
+    dies mid-commit with no traceback — "bus error", every time, at the first
+    checkpoint. A rollback journal uses no shared memory and maps no file, so
+    the failure cannot occur.
+
+    Set ``HOSPITALS_SQLITE_JOURNAL=truncate`` (or ``delete``) for a load onto a
+    volume that has shown the fault. Readers then wait during a write rather
+    than reading alongside it, which is the price of the trade.
+    """
+
+    requested = os.environ.get("HOSPITALS_SQLITE_JOURNAL", "").strip().upper()
+    return requested if requested in {"WAL", "TRUNCATE", "DELETE", "PERSIST"} else "WAL"
+
+
 def _configure_sqlite(engine: Engine) -> None:
     """Make a file-backed SQLite database usable while a long batch runs.
 
@@ -430,6 +449,8 @@ def _configure_sqlite(engine: Engine) -> None:
       files on disk can afford that trade; a ledger could not.
     """
 
+    journal = _journal_mode()
+
     @event.listens_for(engine, "connect")
     def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - driver hook
         cursor = dbapi_connection.cursor()
@@ -437,7 +458,7 @@ def _configure_sqlite(engine: Engine) -> None:
             cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
             # Fails harmlessly on :memory: and on a database another process
             # holds exclusively; the busy_timeout above still applies.
-            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA journal_mode={journal}")
             cursor.execute("PRAGMA synchronous=NORMAL")
         finally:
             cursor.close()

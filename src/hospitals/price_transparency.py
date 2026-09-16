@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import itertools
 import gzip
 import io
 import os
@@ -276,8 +277,24 @@ _SNIFF_BYTES = 256 * 1024
 def detect_encoding(sample: bytes) -> str:
     """Return the text encoding to use for a CSV sample."""
 
+    # Excel's "Unicode Text (*.txt)" export writes UTF-16 with a byte order
+    # mark, and a handful of hospitals publish that. Read as cp1252 the first
+    # row comes back as "\xff\xfeh\x00o\x00s\x00p..." so no column name ever
+    # matches and the file is rejected for having "no recognizable data header"
+    # — a decoding bug wearing the costume of a malformed file. UTF-32 starts
+    # with the same two bytes, so the NUL pair rules it out.
+    if sample.startswith((b"\xff\xfe", b"\xfe\xff")) and not sample.startswith(
+        (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")
+    ):
+        return "utf-16"
     if sample.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
+    # UTF-16 without a BOM: every ASCII character is padded with a NUL, so a
+    # quarter of the leading bytes being NUL is decisive where real UTF-8 and
+    # cp1252 text has none at all.
+    head = sample[:4096]
+    if head.count(b"\x00") > len(head) // 4:
+        return "utf-16-le" if head[1:2] == b"\x00" else "utf-16-be"
     try:
         # Trailing bytes may split a multi-byte character; that is not evidence
         # against UTF-8, so ignore errors at the tail only.
@@ -567,10 +584,39 @@ def _cell(row: Sequence[str], idx: dict[str, int], name: str):
 # ``list[str]`` and a matching close function, and everything downstream is shared.
 
 
+#: What a ``.csv`` can actually be separated by. Excel's "Unicode Text" export
+#: writes tabs and hospitals publish the result under a ``.csv`` name, so the
+#: extension is a poor witness; the first line is the better one.
+_DELIMITERS = {",": "comma", "\t": "tab", ";": "semicolon", "|": "pipe"}
+
+
+def detect_delimiter(first_line: str) -> str:
+    """Return the character a CSV's columns are actually separated by.
+
+    A tab-separated file read with a comma delimiter yields one enormous field
+    per row, so no column name matches and the file is rejected for having no
+    data header. Counting candidates on the first line settles it, and a tie
+    goes to the comma the extension promised.
+    """
+
+    counts = {d: first_line.count(d) for d in _DELIMITERS}
+    best = max(_DELIMITERS, key=lambda d: (counts[d], d == ","))
+    return best if counts[best] > counts[","] else ","
+
+
 def _csv_row_source(path: str):
     stream_cm = open_mrf_text(path)
     stream = stream_cm.__enter__()
-    return csv.reader(stream), lambda: stream_cm.__exit__(None, None, None)
+    # Read one line to choose the delimiter, then hand it back to the reader so
+    # no row is consumed. Safe because line 1 of an MRF is the metadata header.
+    first_line = stream.readline()
+    delimiter = detect_delimiter(first_line)
+    if delimiter != ",":
+        log.info(
+            "%s: reading as %s-delimited", os.path.basename(path), _DELIMITERS[delimiter]
+        )
+    reader = csv.reader(itertools.chain([first_line], stream), delimiter=delimiter)
+    return reader, lambda: stream_cm.__exit__(None, None, None)
 
 
 def _xlsx_row_source(path: str):

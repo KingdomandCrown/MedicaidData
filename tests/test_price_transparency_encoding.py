@@ -19,6 +19,10 @@ CP1252_CSV = os.path.join(FIX, "mrf_cp1252_sample.csv")
 CP1252_ZIP = os.path.join(FIX, "mrf_cp1252_sample.zip")
 BOM_JSON = os.path.join(FIX, "mrf_bom_sample.json")
 UTF8_CSV = os.path.join(FIX, "mrf_tall_sample.csv")
+UTF16_CSV = os.path.join(FIX, "mrf_utf16_sample.csv")
+UTF16_NOBOM_CSV = os.path.join(FIX, "mrf_utf16_nobom_sample.csv")
+TAB_CSV = os.path.join(FIX, "mrf_tab_sample.csv")
+UTF16_TAB_CSV = os.path.join(FIX, "mrf_utf16_tab_sample.csv")
 
 
 # --- encoding detection ---------------------------------------------------
@@ -109,3 +113,77 @@ def test_bom_stripper_handles_small_reads():
     s = pt._BomStrippedBinary(io.BytesIO(b"\xef\xbb\xbf" + b"abcdef"))
     assert s.read(2) == b"ab"
     assert s.read() == b"cdef"
+
+
+# --- UTF-16 CSV -----------------------------------------------------------
+
+
+def test_detect_encoding_honours_a_utf16_bom():
+    assert pt.detect_encoding("hospital_name".encode("utf-16")) == "utf-16"
+    big_endian = b"\xfe\xff" + "hospital_name".encode("utf-16-be")
+    assert pt.detect_encoding(big_endian) == "utf-16"
+
+
+def test_detect_encoding_finds_utf16_without_a_bom():
+    assert pt.detect_encoding("hospital_name,version".encode("utf-16-le")) == "utf-16-le"
+    assert pt.detect_encoding("hospital_name,version".encode("utf-16-be")) == "utf-16-be"
+
+
+def test_utf32_is_not_mistaken_for_utf16():
+    assert pt.detect_encoding("a".encode("utf-32")) != "utf-16"
+
+
+def test_utf16_csv_parses():
+    """Two Alabama hospitals published the CMS template as UTF-16.
+
+    Read as cp1252 the header row arrives as 'ÿþh\x00o\x00s\x00p...', so the
+    file was rejected for having no data header rather than for its encoding.
+    """
+
+    assert open(UTF16_CSV, "rb").read(2) == b"\xff\xfe"
+
+    meta, rows = pt.read_any(UTF16_CSV)
+    rows = list(rows)
+    assert meta.hospital_name == "Sunflower General Hospital"
+    assert len(rows) == 3
+    assert rows[0].description == "CT scan head w/o contrast"
+
+
+def test_utf16_csv_without_a_bom_parses():
+    meta, rows = pt.read_any(UTF16_NOBOM_CSV)
+    assert meta.hospital_name == "Sunflower General Hospital"
+    assert len(list(rows)) == 3
+
+
+# --- delimiters -----------------------------------------------------------
+
+
+def test_detect_delimiter_reads_the_first_line():
+    assert pt.detect_delimiter("a,b,c") == ","
+    assert pt.detect_delimiter("a\tb\tc") == "\t"
+    assert pt.detect_delimiter("a;b;c") == ";"
+    assert pt.detect_delimiter("a|b|c") == "|"
+
+
+def test_a_comma_wins_a_tie():
+    """A description holding one tab must not turn a CSV into a TSV."""
+
+    assert pt.detect_delimiter('desc,code\n') == ","
+    assert pt.detect_delimiter("one\ttab,and,three,commas") == ","
+
+
+def test_tab_delimited_csv_parses():
+    meta, rows = pt.read_any(TAB_CSV)
+    rows = list(rows)
+    assert meta.hospital_name == "Sunflower General Hospital"
+    assert len(rows) == 3
+    assert rows[0].description == "CT scan head w/o contrast"
+
+
+def test_utf16_tab_delimited_csv_parses():
+    """Excel's "Unicode Text" export: UTF-16 and tab-separated, named .csv."""
+
+    meta, rows = pt.read_any(UTF16_TAB_CSV)
+    rows = list(rows)
+    assert meta.hospital_name == "Sunflower General Hospital"
+    assert len(rows) == 3

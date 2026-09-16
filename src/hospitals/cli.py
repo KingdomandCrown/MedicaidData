@@ -43,6 +43,7 @@ from .gap import build_gap_report, write_xlsx
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
 from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
+from .price_transparency import detect_encoding
 from .ingest import ingest_state
 from .merge_vaults import apply_merge, plan_merge, sqlite_path
 from .ingest_charges import ingest_charge_path
@@ -1208,8 +1209,14 @@ def _text_fetcher(timeout: int):
             return None
         if response.status_code != 200:
             return None
-        # cms-hpt.txt is a few hundred bytes. Anything large is a web page.
-        return response.text[:200_000]
+        # Sutter publishes its cms-hpt.txt as UTF-16, which requests decodes as
+        # Latin-1 into "l o c a t i o n - n a m e" and no field ever matches.
+        # The MRF parser already knows how to tell these apart, so ask it.
+        raw = response.content[:200_000]
+        try:
+            return raw.decode(detect_encoding(raw), errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            return response.text[:200_000]
 
     return fetch
 
