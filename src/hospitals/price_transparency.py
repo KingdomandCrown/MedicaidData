@@ -115,18 +115,34 @@ class ChargeRow:
 
 # --- value parsing --------------------------------------------------------
 
+_NA_MARKERS = {"N/A", "NA", "NONE"}
+
 
 def to_decimal(value) -> Decimal | None:
     text = clean_str(value)
     if text is None:
         return None
     text = text.replace("$", "").replace(",", "").strip()
-    if not text or text.upper() in {"N/A", "NA", "NONE"}:
+    if not text or text.upper() in _NA_MARKERS:
         return None
     try:
         return Decimal(text)
     except (InvalidOperation, ValueError):
         return None
+
+
+def clean_text(value) -> str | None:
+    """``clean_str``, plus treating an explicit "N/A"/"NA"/"NONE" as absent.
+
+    A chargemaster export that has no specific payer for a row (a gross-charge
+    line, not a negotiated one) fills payer_name/plan_name with the literal
+    text "N/A" rather than leaving the cell blank.
+    """
+
+    text = clean_str(value)
+    if text is None or text.upper() in _NA_MARKERS:
+        return None
+    return text
 
 
 def to_int(value) -> int | None:
@@ -445,11 +461,34 @@ _METADATA_COLUMNS = {
 # rows plus the odd blank spacer; anything deeper is not an MRF we understand.
 _MAX_PREAMBLE_ROWS = 8
 
+# Some hospitals publish a straight chargemaster export instead of the CMS
+# template — same shape (one row per item, sometimes per payer), different
+# column names. "Bill Code" (the hospital's internal chargemaster code) is
+# aliased ahead of "Alternate Bill Code" (a CPT/HCPCS code when one exists)
+# since it's the column that's always populated; the alternate code rides
+# along as a second code rather than displacing it.
+_VENDOR_COLUMN_ALIASES = {
+    "insurance name": "payer_name",
+    "plan name": "plan_name",
+    "bill code description": "description",
+    "bill code": "code|1",
+    "bill code type": "code|1|type",
+    "alternate bill code": "code|2",
+    "gross charge": "standard_charge|gross",
+    "payor rate": "standard_charge|negotiated_dollar",
+    "minimum charge": "standard_charge|min",
+    "maximum charge": "standard_charge|max",
+}
+
+
+def _canonicalize_header(row: Sequence[str]) -> list[str]:
+    return [_VENDOR_COLUMN_ALIASES.get(c.strip().lower(), c) for c in row]
+
 
 def _looks_like_data_header(row: Sequence[str]) -> bool:
     """Decide whether a row names the data columns rather than the metadata."""
 
-    lowered = {c.strip().lower() for c in row}
+    lowered = {c.strip().lower() for c in _canonicalize_header(row)}
 
     # Metadata markers settle it: a row naming the hospital cannot be the row
     # naming the charges, whatever else it happens to contain.
@@ -483,7 +522,7 @@ def _read_header_block(reader, path: str) -> tuple[list[str], list[str], list[st
         if not any(clean_str(c) for c in row):
             continue  # blank spacer line between the preamble and the data
         if _looks_like_data_header(row):
-            data_header = list(row)
+            data_header = _canonicalize_header(row)
             break
         preamble.append(list(row))
         if len(preamble) > _MAX_PREAMBLE_ROWS:
@@ -741,8 +780,8 @@ def _tall_row(row: Sequence[str], idx: dict[str, int]) -> ChargeRow | None:
         return None
     return ChargeRow(
         **base,
-        payer_name=clean_str(_cell(row, idx, "payer_name")),
-        plan_name=clean_str(_cell(row, idx, "plan_name")),
+        payer_name=clean_text(_cell(row, idx, "payer_name")),
+        plan_name=clean_text(_cell(row, idx, "plan_name")),
         negotiated_dollar=to_decimal(_cell(row, idx, "standard_charge|negotiated_dollar")),
         negotiated_percentage=to_decimal(_cell(row, idx, "standard_charge|negotiated_percentage")),
         negotiated_algorithm=clean_str(_cell(row, idx, "standard_charge|negotiated_algorithm")),
