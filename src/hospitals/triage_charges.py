@@ -23,6 +23,21 @@ from .logging_config import get_logger
 log = get_logger(__name__)
 
 REVIEW_NOTES_FILE = "_review_notes.txt"
+_OUTPUT_FOLDER_NAMES = {"_ingested", "_needs_review"}
+
+
+def _default_output_root(source_dir: str) -> str:
+    """Where done/review folders default to.
+
+    Re-triaging a review folder directly (a natural thing to do after fixing
+    a parser) must not nest a fresh _ingested/_needs_review inside the one
+    it's already standing in — it should fold back into the same two
+    folders the original run made, as siblings of source_dir's parent.
+    """
+
+    if os.path.basename(os.path.normpath(source_dir)) in _OUTPUT_FOLDER_NAMES:
+        return os.path.dirname(os.path.normpath(source_dir))
+    return source_dir
 
 
 @dataclass
@@ -45,8 +60,9 @@ def triage_charges(
     if not os.path.isdir(source_dir):
         raise NotADirectoryError(source_dir)
 
-    done_dir = done_dir or os.path.join(source_dir, "_ingested")
-    review_dir = review_dir or os.path.join(source_dir, "_needs_review")
+    output_root = _default_output_root(source_dir)
+    done_dir = done_dir or os.path.join(output_root, "_ingested")
+    review_dir = review_dir or os.path.join(output_root, "_needs_review")
     os.makedirs(done_dir, exist_ok=True)
     os.makedirs(review_dir, exist_ok=True)
 
@@ -60,6 +76,8 @@ def triage_charges(
     for root, dirs, names in os.walk(source_dir):
         dirs[:] = [d for d in dirs if not d.startswith(("_", "."))]
         for name in sorted(names):
+            if name == REVIEW_NOTES_FILE:
+                continue  # our own bookkeeping, not a candidate file
             full = os.path.join(root, name)
             entries.append(os.path.relpath(full, source_dir))
     entries.sort()

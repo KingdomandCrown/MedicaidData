@@ -184,3 +184,49 @@ def test_custom_done_and_review_dirs_are_honoured(tmp_path):
 
     assert os.path.exists(os.path.join(done, "good.csv"))
     assert not os.path.exists(os.path.join(source, "_ingested"))
+
+
+def test_retriaging_a_review_folder_folds_back_into_its_siblings(tmp_path):
+    """Fixing a parser and re-running against the review folder it produced
+    must not nest a fresh _ingested/_needs_review inside itself -- it should
+    land in the same two folders the original run made."""
+
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+    source = str(tmp_path / "drop")
+    os.makedirs(source)
+    with open(os.path.join(source, "junk.csv"), "w") as f:
+        f.write("a,b,c\n1,2,3\n")  # force a review-bound failure
+    triage_charges(source, database_url=db_url)
+    review_dir = os.path.join(source, "_needs_review")
+    assert os.path.exists(os.path.join(review_dir, "junk.csv"))
+
+    # Simulate a parser fix: swap in a file that will now succeed, keeping
+    # the same name, then re-triage the review folder directly.
+    os.remove(os.path.join(review_dir, "junk.csv"))
+    shutil.copy(os.path.join(FIX, "mrf_tall_sample.csv"), os.path.join(review_dir, "junk.csv"))
+    summary = triage_charges(review_dir, database_url=db_url)
+
+    assert [s.source_file for s in summary.loaded] == ["junk.csv"]
+    # Landed in _ingested next to _needs_review, not nested inside it.
+    assert os.path.exists(os.path.join(source, "_ingested", "junk.csv"))
+    assert not os.path.exists(os.path.join(review_dir, "_ingested"))
+    assert not os.path.exists(os.path.join(review_dir, "_needs_review"))
+
+
+def test_review_notes_file_is_not_treated_as_a_candidate(tmp_path):
+    """A re-triage must not re-flag its own bookkeeping file as an
+    unrecognized file type on every subsequent run."""
+
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+    source = str(tmp_path / "drop")
+    os.makedirs(source)
+    with open(os.path.join(source, "junk.csv"), "w") as f:
+        f.write("a,b,c\n1,2,3\n")
+    triage_charges(source, database_url=db_url)
+    review_dir = os.path.join(source, "_needs_review")
+    assert os.path.exists(os.path.join(review_dir, REVIEW_NOTES_FILE))
+
+    summary = triage_charges(review_dir, database_url=db_url)
+
+    assert REVIEW_NOTES_FILE not in [name for name, _reason in summary.failed]
+    assert summary.failed == [("junk.csv", summary.failed[0][1])]
