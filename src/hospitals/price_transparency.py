@@ -478,11 +478,42 @@ _VENDOR_COLUMN_ALIASES = {
     "payor rate": "standard_charge|negotiated_dollar",
     "minimum charge": "standard_charge|min",
     "maximum charge": "standard_charge|max",
+    # Ray County's vendor export names its own columns instead of using CMS's,
+    # but plainly enough to alias directly.
+    "cdm item number": "code|1",
+    "revenue code": "code|2",
+    "service description": "description",
+    "discounted cash price": "standard_charge|discounted_cash",
+    "minimum negotiated charge": "standard_charge|min",
+    "maximum negotiated charge": "standard_charge|max",
 }
+
+# The same vendor spells out payer *and* plan in the column name itself —
+# "Payer Negotiated Charge: Aetna (Plan: Default)" — rather than using CMS's
+# pipe-delimited convention. Rewritten into that convention (payer/plan segments
+# keep their original casing), it needs no extraction code of its own: the
+# existing wide-format grouping already knows how to read a real
+# standard_charge|<payer>|<plan>|<subfield> column.
+_PAYER_NEGOTIATED_RE = re.compile(
+    r"^payer negotiated charge:\s*(.+?)\s*\(plan:\s*(.+?)\)\s*$", re.IGNORECASE
+)
 
 
 def _canonicalize_header(row: Sequence[str]) -> list[str]:
-    return [_VENDOR_COLUMN_ALIASES.get(c.strip().lower(), c) for c in row]
+    out = []
+    for c in row:
+        stripped = c.strip()
+        alias = _VENDOR_COLUMN_ALIASES.get(stripped.lower())
+        if alias is not None:
+            out.append(alias)
+            continue
+        match = _PAYER_NEGOTIATED_RE.match(stripped)
+        if match:
+            payer, plan = match.group(1).strip(), match.group(2).strip()
+            out.append(f"standard_charge|{payer}|{plan}|negotiated_dollar")
+            continue
+        out.append(c)
+    return out
 
 
 def _looks_like_data_header(row: Sequence[str]) -> bool:

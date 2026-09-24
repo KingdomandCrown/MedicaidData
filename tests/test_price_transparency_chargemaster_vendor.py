@@ -15,6 +15,7 @@ from hospitals import price_transparency as pt
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 VENDOR = os.path.join(FIX, "mrf_chargemaster_vendor_sample.csv")
 UNRELATED_VENDOR = os.path.join(FIX, "mrf_unrelated_vendor_gross_charge_only.csv")
+RAY_COUNTY = os.path.join(FIX, "mrf_ray_county_vendor_sample.csv")
 
 
 def test_vendor_header_is_recognized_as_a_data_header():
@@ -63,6 +64,34 @@ def test_vendor_file_on_line_one_has_no_metadata_preamble():
 
     meta, _rows = pt.read_any(VENDOR)
     assert meta.hospital_name is None
+
+
+def test_ray_county_payer_negotiated_charge_columns_parse_as_wide():
+    """"Payer Negotiated Charge: X (Plan: Y)" spells out payer and plan in the
+    column name itself rather than CMS's pipe-delimited convention; rewriting
+    it into that convention lets the existing wide-format grouping read it
+    with no extraction code of its own."""
+
+    meta, rows = pt.read_any(RAY_COUNTY)
+    rows = list(rows)
+
+    assert meta.layout == "wide"
+    assert len(rows) == 3  # item 10 has 2 non-blank payer rates, item 100 has 1
+
+    pentoxifylline = [r for r in rows if r.code == "10"]
+    assert {(r.payer_name, r.plan_name, str(r.negotiated_dollar)) for r in pentoxifylline} == {
+        ("Aetna", "Default", "1.09"),
+        ("Aetna", "Medicare Advantage", "2.84"),
+    }
+    assert pentoxifylline[0].description == "NF-PENTOXIFYLLINE ORAL TAB 400MG"
+    assert str(pentoxifylline[0].gross_charge) == "10.61"
+    assert str(pentoxifylline[0].min_charge) == "1.09"
+    assert str(pentoxifylline[0].max_charge) == "8.25"
+
+    alphagan = [r for r in rows if r.code == "100"]
+    assert len(alphagan) == 1  # only BCBS-KC had a value; the two Aetna cells were blank
+    assert alphagan[0].payer_name == "Blue Cross Blue Shield of Kansas City"
+    assert str(alphagan[0].negotiated_dollar) == "5.57"
 
 
 def test_an_unrelated_vendor_with_only_a_gross_charge_column_is_not_misread():
