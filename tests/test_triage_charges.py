@@ -84,6 +84,56 @@ def test_mixed_batch_sorts_each_file_independently(tmp_path):
     assert os.listdir(source) == ["_ingested", "_needs_review"]
 
 
+def test_descends_into_round_subfolders(tmp_path):
+    """A real drop folder arrives as one subdirectory per download round."""
+
+    source = str(tmp_path / "drop")
+    os.makedirs(os.path.join(source, "round 8"))
+    os.makedirs(os.path.join(source, "Round 11"))
+    shutil.copy(
+        os.path.join(FIX, "mrf_tall_sample.csv"),
+        os.path.join(source, "round 8", "hospital_a.csv"),
+    )
+    shutil.copy(
+        os.path.join(FIX, "mrf_wide_sample.csv"),
+        os.path.join(source, "Round 11", "hospital_b.csv"),
+    )
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+
+    summary = triage_charges(source, database_url=db_url)
+
+    assert sorted(s.source_file for s in summary.loaded) == [
+        "hospital_a.csv", "hospital_b.csv",
+    ]
+    assert os.path.exists(os.path.join(source, "_ingested", "round 8", "hospital_a.csv"))
+    assert os.path.exists(os.path.join(source, "_ingested", "Round 11", "hospital_b.csv"))
+
+
+def test_underscore_and_dotfile_folders_are_left_alone(tmp_path):
+    """A pre-existing "_to_delete" folder (the user's own convention) or a
+    dotfile directory is already-handled, not source material to re-walk."""
+
+    source = str(tmp_path / "drop")
+    os.makedirs(os.path.join(source, "_to_delete"))
+    os.makedirs(os.path.join(source, ".git"))
+    shutil.copy(
+        os.path.join(FIX, "mrf_tall_sample.csv"),
+        os.path.join(source, "_to_delete", "old.csv"),
+    )
+    shutil.copy(
+        os.path.join(FIX, "mrf_tall_sample.csv"),
+        os.path.join(source, ".git", "config.csv"),
+    )
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+
+    summary = triage_charges(source, database_url=db_url)
+
+    assert summary.loaded == []
+    assert summary.failed == []
+    assert os.path.exists(os.path.join(source, "_to_delete", "old.csv"))
+    assert os.path.exists(os.path.join(source, ".git", "config.csv"))
+
+
 def test_custom_done_and_review_dirs_are_honoured(tmp_path):
     source = _drop_folder(tmp_path, {"good.csv": "mrf_tall_sample.csv"})
     done = str(tmp_path / "elsewhere_done")

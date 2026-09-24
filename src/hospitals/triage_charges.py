@@ -47,13 +47,19 @@ def triage_charges(
     os.makedirs(done_dir, exist_ok=True)
     os.makedirs(review_dir, exist_ok=True)
 
-    # Sorted up front, and as plain filenames: once a file moves, a path built
-    # from the original directory listing would no longer resolve.
-    entries = sorted(
-        name
-        for name in os.listdir(source_dir)
-        if os.path.isfile(os.path.join(source_dir, name))
-    )
+    # A real drop folder arrives as one subdirectory per download round, so
+    # this has to descend — but never into a "_"-prefixed folder (our own
+    # done/review output, or the user's own pre-existing "_to_delete"
+    # convention) or a dotfile directory, which are already-handled, not
+    # source material. Relative paths are kept (not flattened to basename)
+    # so two rounds that happen to share a filename can't collide on the move.
+    entries: list[str] = []
+    for root, dirs, names in os.walk(source_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(("_", "."))]
+        for name in sorted(names):
+            full = os.path.join(root, name)
+            entries.append(os.path.relpath(full, source_dir))
+    entries.sort()
 
     engine = make_engine(database_url, echo=echo_sql)
     init_db(engine)
@@ -62,28 +68,32 @@ def triage_charges(
     total = len(entries)
     notes_path = os.path.join(review_dir, REVIEW_NOTES_FILE)
 
-    def _reject(name: str, reason: str) -> None:
-        summary.failed.append((name, reason))
-        shutil.move(os.path.join(source_dir, name), os.path.join(review_dir, name))
+    def _reject(rel: str, reason: str) -> None:
+        summary.failed.append((rel, reason))
+        dest = os.path.join(review_dir, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.move(os.path.join(source_dir, rel), dest)
         with open(notes_path, "a") as notes:
-            notes.write(f"{name}: {reason}\n")
+            notes.write(f"{rel}: {reason}\n")
 
-    for n, name in enumerate(entries, start=1):
-        if not name.lower().endswith(SUPPORTED):
-            log.warning("[%d/%d] not an ingestible file type: %s", n, total, name)
-            _reject(name, f"not a recognized price-transparency file type ({SUPPORTED})")
+    for n, rel in enumerate(entries, start=1):
+        if not rel.lower().endswith(SUPPORTED):
+            log.warning("[%d/%d] not an ingestible file type: %s", n, total, rel)
+            _reject(rel, f"not a recognized price-transparency file type ({SUPPORTED})")
             continue
-        log.info("[%d/%d] %s", n, total, name)
-        path = os.path.join(source_dir, name)
+        log.info("[%d/%d] %s", n, total, rel)
+        path = os.path.join(source_dir, rel)
         try:
             result = ingest_charge_file(
                 path, database_url=database_url, limit=limit, echo_sql=echo_sql, engine=engine,
             )
             summary.loaded.append(result)
-            shutil.move(path, os.path.join(done_dir, name))
+            dest = os.path.join(done_dir, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(path, dest)
         except Exception as exc:  # noqa: BLE001 - one bad file must not end the batch
-            log.error("[%d/%d] FAILED %s: %s", n, total, name, exc)
-            _reject(name, str(exc))
+            log.error("[%d/%d] FAILED %s: %s", n, total, rel, exc)
+            _reject(rel, str(exc))
 
     log.info(
         "Triaged %d file(s): %d loaded into the vault, %d moved to review.",
