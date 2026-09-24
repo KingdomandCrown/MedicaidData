@@ -8,10 +8,13 @@ scanner found no recognizable data header at all and refused the file.
 
 import os
 
+import pytest
+
 from hospitals import price_transparency as pt
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 VENDOR = os.path.join(FIX, "mrf_chargemaster_vendor_sample.csv")
+UNRELATED_VENDOR = os.path.join(FIX, "mrf_unrelated_vendor_gross_charge_only.csv")
 
 
 def test_vendor_header_is_recognized_as_a_data_header():
@@ -60,3 +63,14 @@ def test_vendor_file_on_line_one_has_no_metadata_preamble():
 
     meta, _rows = pt.read_any(VENDOR)
     assert meta.hospital_name is None
+
+
+def test_an_unrelated_vendor_with_only_a_gross_charge_column_is_not_misread():
+    """A third, unrelated chargemaster export whose only overlap with the
+    Great River vendor format is an ordinary "Gross Charge" column used to
+    silently "succeed" with 0 rows instead of correctly failing: the alias
+    to standard_charge|gross (1 pipe) was accepted as proof of a genuine CMS
+    wide file, whose real per-payer columns always carry >= 2 pipes."""
+
+    with pytest.raises(ValueError, match="data header"):
+        pt.read_any(UNRELATED_VENDOR)

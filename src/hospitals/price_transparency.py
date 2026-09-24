@@ -499,7 +499,15 @@ def _looks_like_data_header(row: Sequence[str]) -> bool:
 
     if lowered & _STRONG_DATA_COLUMNS:
         return True
-    if any(c.startswith("standard_charge|") for c in lowered):
+    # A genuine CMS wide column is payer|plan-qualified (>= 2 pipes), e.g.
+    # "standard_charge|AETNA|PPO|negotiated_dollar". A vendor-alias target
+    # like "standard_charge|gross" (1 pipe) is not that — it is one ordinary
+    # "Gross Charge" column away from any other Great-River-style column, and
+    # treating it as decisive on its own is what let a third, unrelated
+    # vendor's chargemaster (its only shared trait: a column also named
+    # "Gross Charge") get misrecognized, then silently drop every row since
+    # none of its other columns matched anything.
+    if any(c.startswith("standard_charge|") and c.count("|") >= 2 for c in lowered):
         return True
     # No decisive column, so require corroboration: one suggestive name could
     # be a metadata field, two together are a data header.
