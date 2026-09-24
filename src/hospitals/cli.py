@@ -47,6 +47,7 @@ from .price_transparency import detect_encoding
 from .ingest import ingest_state
 from .merge_vaults import apply_merge, plan_merge, sqlite_path
 from .ingest_charges import ingest_charge_path
+from .triage_charges import REVIEW_NOTES_FILE, triage_charges
 from .link import link_charges, load_crosswalk
 from .logging_config import configure_logging, get_logger
 from .price import price_for_code
@@ -163,6 +164,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep going when a file fails; report the failures at the end.",
     )
     charges.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Load into a database with no hospitals in it. Refused by default: "
+        "those rows can never be linked, and it is almost always a wrong "
+        "--database-url.",
+    )
+
+    triage = sub.add_parser(
+        "triage-charges",
+        help="Ingest every file in a drop folder, filing each one as done or "
+        "needs-review so the folder itself shows what's left.",
+    )
+    triage.add_argument("source_dir", help="Folder of downloaded MRF files.")
+    triage.add_argument("--database-url", default=DEFAULT_DB_URL)
+    triage.add_argument(
+        "--done-dir",
+        default=None,
+        help="Where successfully-loaded files move to (default: "
+        "<source_dir>/_ingested).",
+    )
+    triage.add_argument(
+        "--review-dir",
+        default=None,
+        help="Where files that failed to load move to, with a note of why "
+        "(default: <source_dir>/_needs_review).",
+    )
+    triage.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap on items (data rows) read per file (smoke testing large files).",
+    )
+    triage.add_argument("--echo-sql", action="store_true")
+    triage.add_argument(
         "--allow-empty",
         action="store_true",
         help="Load into a database with no hospitals in it. Refused by default: "
@@ -622,6 +657,57 @@ def _cmd_ingest_charges(args: argparse.Namespace) -> int:
         )
     if len(summaries) > 1:
         print(f"\nTotal: {total} charge rows from {len(summaries)} files.")
+    return 0
+
+
+def _cmd_triage_charges(args: argparse.Namespace) -> int:
+    # Same "don't load into an unlinkable database" guardrail as ingest-charges.
+    engine = make_engine(args.database_url)
+    try:
+        require_schema(engine, args.database_url)
+        known = count_hospitals(engine)
+    except EmptyDatabase:
+        known = 0
+    if known == 0 and not args.allow_empty:
+        print(
+            f"\nERROR: {args.database_url} holds no hospitals.\n"
+            "  Charge files loaded here can never be linked to a CCN. Load the\n"
+            "  hospitals first:  hospitals ingest --state ALL\n"
+            "  Or pass --allow-empty if this really is a scratch database.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"\nTriaging {args.source_dir} into {args.database_url} ({known:,} hospitals known).")
+    try:
+        summary = triage_charges(
+            args.source_dir,
+            database_url=args.database_url,
+            done_dir=args.done_dir,
+            review_dir=args.review_dir,
+            limit=args.limit,
+            echo_sql=args.echo_sql,
+        )
+    except NotADirectoryError as exc:
+        print(f"\nERROR: not a directory: {exc}", file=sys.stderr)
+        return 2
+
+    total_rows = sum(s.charges_loaded for s in summary.loaded)
+    print()
+    for s in summary.loaded:
+        print(
+            f"  LOADED  {s.source_file} "
+            f"[{s.hospital_name or '?'}, EIN {s.ein}, {s.charges_loaded:,} rows]"
+        )
+    for name, reason in summary.failed:
+        print(f"  REVIEW  {name}: {reason}")
+    print(
+        f"\n{len(summary.loaded)} file(s) loaded ({total_rows:,} charge rows), "
+        f"{len(summary.failed)} moved to review."
+    )
+    if summary.failed:
+        review_dir = args.review_dir or os.path.join(args.source_dir, "_needs_review")
+        print(f"See {os.path.join(review_dir, REVIEW_NOTES_FILE)} for the reasons.")
     return 0
 
 
@@ -1570,6 +1656,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_stats(args)
     if args.command == "ingest-charges":
         return _cmd_ingest_charges(args)
+    if args.command == "triage-charges":
+        return _cmd_triage_charges(args)
     if args.command == "link-charges":
         return _cmd_link_charges(args)
     if args.command == "duplicates":
