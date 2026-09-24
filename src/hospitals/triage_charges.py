@@ -15,7 +15,8 @@ import os
 import shutil
 from dataclasses import dataclass, field
 
-from .db import init_db, make_engine
+from . import price_transparency as pt
+from .db import init_db, loaded_source_files, make_engine
 from .ingest_charges import SUPPORTED, ChargeIngestSummary, ingest_charge_file
 from .logging_config import get_logger
 
@@ -28,6 +29,7 @@ REVIEW_NOTES_FILE = "_review_notes.txt"
 class TriageSummary:
     loaded: list[ChargeIngestSummary] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)  # (filename, reason)
+    skipped: int = 0
 
 
 def triage_charges(
@@ -38,6 +40,7 @@ def triage_charges(
     review_dir: str | None = None,
     limit: int | None = None,
     echo_sql: bool = False,
+    skip_existing: bool = False,
 ) -> TriageSummary:
     if not os.path.isdir(source_dir):
         raise NotADirectoryError(source_dir)
@@ -64,6 +67,14 @@ def triage_charges(
     engine = make_engine(database_url, echo=echo_sql)
     init_db(engine)
 
+    # A re-encountered filename isn't rejected by load_charges' own uniqueness
+    # — it replaces the prior load (delete then re-insert), which on a vault
+    # this size can cost minutes per file for what's usually the exact same
+    # data as before. A batch this large is almost always a rerun over a
+    # folder that overlaps earlier rounds, so skip what's already there
+    # instead of paying that replace cost file after file.
+    done: set[str] = loaded_source_files(engine) if skip_existing else set()
+
     summary = TriageSummary()
     total = len(entries)
     notes_path = os.path.join(review_dir, REVIEW_NOTES_FILE)
@@ -81,6 +92,13 @@ def triage_charges(
             log.warning("[%d/%d] not an ingestible file type: %s", n, total, rel)
             _reject(rel, f"not a recognized price-transparency file type ({SUPPORTED})")
             continue
+        if skip_existing and pt._strip_hash_prefix(rel) in done:
+            summary.skipped += 1
+            dest = os.path.join(done_dir, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(os.path.join(source_dir, rel), dest)
+            log.info("[%d/%d] skip (already loaded): %s", n, total, rel)
+            continue
         log.info("[%d/%d] %s", n, total, rel)
         path = os.path.join(source_dir, rel)
         try:
@@ -96,7 +114,8 @@ def triage_charges(
             _reject(rel, str(exc))
 
     log.info(
-        "Triaged %d file(s): %d loaded into the vault, %d moved to review.",
-        total, len(summary.loaded), len(summary.failed),
+        "Triaged %d file(s): %d loaded into the vault, %d skipped (already loaded), "
+        "%d moved to review.",
+        total, len(summary.loaded), summary.skipped, len(summary.failed),
     )
     return summary

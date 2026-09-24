@@ -198,6 +198,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     triage.add_argument("--echo-sql", action="store_true")
     triage.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip a file whose name is already loaded, instead of paying the "
+        "cost of replacing it (delete then re-insert). A batch that overlaps "
+        "earlier rounds is the common case, not the exception.",
+    )
+    triage.add_argument(
         "--allow-empty",
         action="store_true",
         help="Load into a database with no hospitals in it. Refused by default: "
@@ -687,6 +694,7 @@ def _cmd_triage_charges(args: argparse.Namespace) -> int:
             review_dir=args.review_dir,
             limit=args.limit,
             echo_sql=args.echo_sql,
+            skip_existing=args.skip_existing,
         )
     except NotADirectoryError as exc:
         print(f"\nERROR: not a directory: {exc}", file=sys.stderr)
@@ -703,6 +711,7 @@ def _cmd_triage_charges(args: argparse.Namespace) -> int:
         print(f"  REVIEW  {name}: {reason}")
     print(
         f"\n{len(summary.loaded)} file(s) loaded ({total_rows:,} charge rows), "
+        f"{summary.skipped} already loaded (skipped), "
         f"{len(summary.failed)} moved to review."
     )
     if summary.failed:

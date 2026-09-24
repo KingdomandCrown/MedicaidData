@@ -8,10 +8,10 @@ from sqlalchemy import select
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
-def _drop_folder(tmp_path, files: dict[str, str]) -> str:
+def _drop_folder(tmp_path, files: dict[str, str], name: str = "drop") -> str:
     """A scratch source_dir populated with real files, since triage moves them."""
 
-    source = tmp_path / "drop"
+    source = tmp_path / name
     source.mkdir()
     for name, fixture_name in files.items():
         shutil.copy(os.path.join(FIX, fixture_name), source / name)
@@ -132,6 +132,46 @@ def test_underscore_and_dotfile_folders_are_left_alone(tmp_path):
     assert summary.failed == []
     assert os.path.exists(os.path.join(source, "_to_delete", "old.csv"))
     assert os.path.exists(os.path.join(source, ".git", "config.csv"))
+
+
+def test_skip_existing_avoids_the_replace_cost_on_a_rerun(tmp_path):
+    """A file whose name is already loaded gets skipped outright, not
+    re-parsed and replaced -- the expensive path that stalled a real batch."""
+
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+    first_pass = _drop_folder(tmp_path, {"good.csv": "mrf_tall_sample.csv"}, name="drop1")
+    triage_charges(first_pass, database_url=db_url)
+
+    # Same filename shows up again in a second drop folder (a re-run over an
+    # overlapping round). If skip_existing did not actually skip it, this
+    # second pass would replace (delete + re-insert) the original row.
+    second_pass = _drop_folder(tmp_path, {"good.csv": "mrf_tall_sample.csv"}, name="drop2")
+    engine = make_engine(db_url)
+    with engine.begin() as conn:
+        before = conn.execute(select(charge_sources.c.id)).scalar_one()
+
+    summary = triage_charges(second_pass, database_url=db_url, skip_existing=True)
+
+    assert summary.loaded == []
+    assert summary.skipped == 1
+    assert not os.path.exists(os.path.join(second_pass, "good.csv"))
+    assert os.path.exists(os.path.join(second_pass, "_ingested", "good.csv"))
+
+    with engine.connect() as conn:
+        after = conn.execute(select(charge_sources.c.id)).scalar_one()
+    assert after == before  # the original row was never replaced
+
+
+def test_without_skip_existing_a_repeat_file_still_replaces(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 'v.sqlite'}"
+    first_pass = _drop_folder(tmp_path, {"good.csv": "mrf_tall_sample.csv"}, name="drop1")
+    triage_charges(first_pass, database_url=db_url)
+
+    second_pass = _drop_folder(tmp_path, {"good.csv": "mrf_tall_sample.csv"}, name="drop2")
+    summary = triage_charges(second_pass, database_url=db_url)
+
+    assert [s.source_file for s in summary.loaded] == ["good.csv"]
+    assert summary.skipped == 0
 
 
 def test_custom_done_and_review_dirs_are_honoured(tmp_path):
