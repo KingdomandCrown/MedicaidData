@@ -291,6 +291,72 @@ standard_charges = Table(
     Column("additional_notes", Text),
 )
 
+# CMS's own HCRIS Cost Report tables (Report / Numeric / Alpha-Numeric).
+#
+# Every CMS "vintage" release (HOSP10FY<year>.ZIP) is a full cumulative
+# re-publication covering every fiscal year back to 2010, not a delta, and
+# each one shows "the highest level of status" available as of that release
+# -- a settled report replaces an as-submitted one for the *same*
+# rpt_rec_num as CMS finishes auditing it. Whether that ever changes the
+# numbers under an existing rpt_rec_num isn't something to guess at, so
+# nothing is overwritten or deduped across vintages: uniqueness is
+# (rpt_rec_num, vintage_year), meaning importing a second vintage keeps both
+# copies side by side rather than assuming which one is "right." Trending is
+# preserved by construction because nothing is ever deleted or replaced.
+#
+# The Report file's own column layout is not verified against CMS's official
+# record layout, so it is deliberately not decoded here beyond the one field
+# every documented source agrees is first: RPT_REC_NUM. Everything else in
+# that row is kept as the untouched original line rather than asserted into
+# named fields that might be wrong. Numeric and Alpha both use CMS's
+# well-established, universally-documented 5-column shape (RPT_REC_NUM,
+# WKSHT_CD, LINE_NUM, CLMN_NUM, VALUE), so those are decoded directly.
+hcris_reports = Table(
+    "hcris_reports",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("rpt_rec_num", Integer, nullable=False),
+    Column("vintage_year", Integer, nullable=False, index=True),
+    Column("raw_line", Text, nullable=False),
+    Column("source_zip", String(255)),
+    Column("ingested_at", DateTime),
+    UniqueConstraint("rpt_rec_num", "vintage_year", name="uq_hcris_report_vintage"),
+)
+
+hcris_numeric = Table(
+    "hcris_numeric",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "report_id",
+        Integer,
+        ForeignKey("hcris_reports.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    ),
+    Column("wksht_cd", String(20), index=True),
+    Column("line_num", String(10)),
+    Column("clmn_num", String(10)),
+    Column("value", Numeric(20, 4)),
+)
+
+hcris_alpha = Table(
+    "hcris_alpha",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "report_id",
+        Integer,
+        ForeignKey("hcris_reports.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    ),
+    Column("wksht_cd", String(20), index=True),
+    Column("line_num", String(10)),
+    Column("clmn_num", String(10)),
+    Column("value", Text),
+)
+
 # Columns that get overwritten on conflict (everything except the PK).
 _UPSERT_COLUMNS = [c.name for c in hospitals.columns if c.name != "ccn"]
 

@@ -35,11 +35,13 @@ from .db import (
     EmptyDatabase,
     count_charges,
     count_hospitals,
+    init_db,
     make_engine,
     require_schema,
 )
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
+from .hcris_fetch import BASE_URL_TEMPLATE, EARLIEST_VINTAGE_YEAR, fetch_year
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
 from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
@@ -512,6 +514,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetchsa.add_argument(
         "--limit", type=int, default=None, help="Stop after N rows (smoke testing)."
+    )
+
+    hcris = sub.add_parser(
+        "fetch-hcris",
+        help="Download a CMS HCRIS cost-report release and store it raw, versioned "
+        "by vintage. Never overwrites a prior vintage -- safe to run unattended.",
+    )
+    hcris.add_argument("--database-url", default=DEFAULT_DB_URL)
+    hcris.add_argument(
+        "--vintage-year",
+        type=int,
+        action="append",
+        default=None,
+        help="A HCRIS release year to fetch (the HOSP10FY<year> zip). Repeatable. "
+        "Default: the current calendar year.",
+    )
+    hcris.add_argument(
+        "--all-years",
+        action="store_true",
+        help=f"Fetch every vintage from {EARLIEST_VINTAGE_YEAR} through the current "
+        "year instead of just one -- the most trending value from a single "
+        "unattended run.",
+    )
+    hcris.add_argument(
+        "--cache-dir",
+        default="hcris_downloads",
+        help="Where downloaded zips are cached (default: ./hcris_downloads). A "
+        "zip already there is reused rather than re-downloaded.",
+    )
+    hcris.add_argument(
+        "--timeout", type=int, default=300, help="Seconds per request (default: 300)."
     )
 
     chna = sub.add_parser(
@@ -1477,6 +1510,63 @@ def _cmd_fetch_service_area(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_hcris(args: argparse.Namespace) -> int:
+    import datetime as dt
+
+    engine = make_engine(args.database_url)
+    init_db(engine)  # a vault built before this feature has no hcris_* tables yet
+
+    if args.all_years:
+        years = list(range(EARLIEST_VINTAGE_YEAR, dt.date.today().year + 1))
+    elif args.vintage_year:
+        years = sorted(set(args.vintage_year))
+    else:
+        years = [dt.date.today().year]
+
+    opener = requests_opener(timeout=args.timeout)
+    print(f"\nFetching {len(years)} HCRIS vintage(s) into {args.database_url}: {years}")
+
+    totals: dict[str, int] = {}
+    for n, year in enumerate(years, 1):
+        print(f"\n[{n}/{len(years)}] vintage {year}  ({BASE_URL_TEMPLATE.format(year=year)})")
+        try:
+            summary = fetch_year(engine, year, cache_dir=args.cache_dir, opener=opener)
+        except KeyboardInterrupt:
+            print(
+                f"\nStopped at {n}/{len(years)}. Re-run to resume — cached "
+                "downloads and already-loaded vintages are skipped."
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - one bad vintage must not end the run
+            print(f"  ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+            totals["error"] = totals.get("error", 0) + 1
+            continue
+
+        totals[summary.status] = totals.get(summary.status, 0) + 1
+        if summary.status == "already_loaded":
+            print(f"  already loaded: {summary.note}")
+        else:
+            print(
+                f"  loaded {summary.reports_loaded:,} report row(s), "
+                f"{summary.numeric_loaded:,} numeric row(s) "
+                f"({summary.orphan_numeric:,} orphaned), "
+                f"{summary.alpha_loaded:,} alpha row(s) "
+                f"({summary.orphan_alpha:,} orphaned)"
+            )
+
+    print(
+        f"\n{totals.get('loaded', 0)} vintage(s) loaded, "
+        f"{totals.get('already_loaded', 0)} already loaded, "
+        f"{totals.get('error', 0)} failed."
+    )
+    print(
+        "\nThis stores raw report/numeric/alpha rows only -- decoding WKSHT_CD/"
+        "LINE_NUM/CLMN_NUM into named financial metrics is a separate, later step."
+    )
+    attempted = len(years)
+    return 1 if totals.get("error", 0) and totals.get("error", 0) == attempted else 0
+
+
 def _cmd_ingest_chna(args: argparse.Namespace) -> int:
     from .chna_load import load_path
 
@@ -1703,6 +1793,8 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_load_crosswalk(args)
     if args.command == "fetch-service-area":
         return _cmd_fetch_service_area(args)
+    if args.command == "fetch-hcris":
+        return _cmd_fetch_hcris(args)
     if args.command == "service-area":
         return _cmd_service_area(args)
     if args.command == "ingest-chna":
