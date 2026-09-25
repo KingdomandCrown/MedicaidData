@@ -10,6 +10,13 @@ figures for the same report should replace an earlier one, nothing is ever
 overwritten: every vintage is stored side by side, keyed by
 ``(rpt_rec_num, vintage_year)``. Trending is preserved by construction.
 
+Real releases also repeat a ``rpt_rec_num`` *within* one vintage: a reopened
+or reprocessed report gets a new physical row in that release's own Report
+file without a new permanent id. Every physical row is stored regardless; the
+last one in the file (by insertion order) is what Numeric/Alpha rows attach
+to, since a reopened report supersedes its earlier version and CMS's Numeric/
+Alpha files carry only one dataset per ``rpt_rec_num`` anyway.
+
 The Report file's own column layout is not decoded beyond RPT_REC_NUM, the one
 field every documented source agrees on — everything else in that row is kept
 as the untouched original line rather than asserted into named fields that
@@ -71,6 +78,7 @@ class HcrisFetchSummary:
     status: str = "error"  # loaded | already_loaded | error
     zip_path: str | None = None
     reports_loaded: int = 0
+    duplicate_reports: int = 0
     numeric_loaded: int = 0
     alpha_loaded: int = 0
     orphan_numeric: int = 0
@@ -301,14 +309,20 @@ def fetch_year(
                 vintage_year=vintage_year, source_zip=source_zip, batch_size=batch_size,
             )
 
-            report_map = {
-                rpt_rec_num: report_id
-                for report_id, rpt_rec_num in conn.execute(
-                    select(hcris_reports.c.id, hcris_reports.c.rpt_rec_num).where(
-                        hcris_reports.c.vintage_year == vintage_year
-                    )
-                )
-            }
+            # Ordered by id (insertion order): when a rpt_rec_num repeats within
+            # this vintage, the dict comprehension's later write wins, so the
+            # last physical row in the file -- the reopened/reprocessed one --
+            # is what Numeric/Alpha data attaches to. Every row is still in
+            # hcris_reports regardless of which one wins here.
+            report_map: dict[int, int] = {}
+            for report_id, rpt_rec_num in conn.execute(
+                select(hcris_reports.c.id, hcris_reports.c.rpt_rec_num)
+                .where(hcris_reports.c.vintage_year == vintage_year)
+                .order_by(hcris_reports.c.id)
+            ):
+                if rpt_rec_num in report_map:
+                    summary.duplicate_reports += 1
+                report_map[rpt_rec_num] = report_id
 
             summary.numeric_loaded, summary.orphan_numeric = _load_numeric_or_alpha(
                 conn, zf, roles["numeric"], hcris_numeric, report_map,
@@ -321,9 +335,10 @@ def fetch_year(
 
     summary.status = "loaded"
     log.info(
-        "HCRIS vintage %d: %d report row(s), %d numeric row(s) (%d orphaned), "
-        "%d alpha row(s) (%d orphaned)",
-        vintage_year, summary.reports_loaded, summary.numeric_loaded, summary.orphan_numeric,
+        "HCRIS vintage %d: %d report row(s) (%d duplicate rpt_rec_num), "
+        "%d numeric row(s) (%d orphaned), %d alpha row(s) (%d orphaned)",
+        vintage_year, summary.reports_loaded, summary.duplicate_reports,
+        summary.numeric_loaded, summary.orphan_numeric,
         summary.alpha_loaded, summary.orphan_alpha,
     )
     return summary

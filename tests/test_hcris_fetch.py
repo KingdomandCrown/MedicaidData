@@ -2,8 +2,12 @@
 
 Every vintage (HOSP10FY<year>) is a full cumulative re-publication, and a
 report can move from as-submitted to settled between vintages, so nothing is
-overwritten: uniqueness is (rpt_rec_num, vintage_year), and a vintage already
-holding report rows is skipped outright rather than re-processed.
+overwritten: a vintage already holding report rows is skipped outright rather
+than re-processed. Real releases also repeat a rpt_rec_num *within* one
+vintage (a reopened report), which a hard uniqueness constraint on
+(rpt_rec_num, vintage_year) turned out to crash on in production -- CMS's own
+2012-2026 releases hit this in 9 of 17 years. Every physical row is now kept
+regardless.
 """
 
 import io
@@ -91,6 +95,7 @@ def test_a_vintage_loads_reports_numeric_and_alpha_rows(tmp_path):
 
     assert summary.status == "loaded"
     assert summary.reports_loaded == 2
+    assert summary.duplicate_reports == 0
     assert summary.numeric_loaded == 3       # the 9999 row is an orphan, not loaded
     assert summary.orphan_numeric == 1
     assert summary.alpha_loaded == 1
@@ -189,6 +194,52 @@ def test_two_vintages_of_the_same_report_both_survive(tmp_path):
         )
     assert "12345.6700" in values
     assert "99999.9900" in values
+
+
+def test_a_reopened_report_repeating_within_one_vintage_does_not_crash_the_load(tmp_path):
+    """CMS's real 2012-2026 releases hit exactly this in 9 of 17 years: a
+    reopened/reprocessed report gets a second physical row under the same
+    rpt_rec_num in the same release's Report file. A hard uniqueness
+    constraint on (rpt_rec_num, vintage_year) turned that into a crash that
+    rolled back the *entire* vintage -- every report/numeric/alpha row for
+    that year, not just the duplicate. Both rows must survive, and the later
+    one (the reprocessed version) is what Numeric/Alpha data attaches to."""
+
+    engine = _engine(tmp_path)
+    report_with_dupe = REPORT_LINES + "1001,S1,20260615\r\n"  # 1001 reopened, reprocessed
+    zip_with_dupe = _zip_bytes(
+        {
+            "hosp10_2026_RPT.CSV": report_with_dupe,
+            "hosp10_2026_NMRC.CSV": NUMERIC_LINES,
+            "hosp10_2026_ALPHA.CSV": ALPHA_LINES,
+        }
+    )
+
+    summary = fetch_year(engine, 2026, cache_dir=str(tmp_path / "cache"), opener=_opener(zip_with_dupe))
+
+    assert summary.status == "loaded"
+    assert summary.reports_loaded == 3   # both physical rows for 1001, plus 1002
+    assert summary.duplicate_reports == 1
+
+    with engine.connect() as conn:
+        report_rows = list(
+            conn.execute(
+                select(hcris_reports.c.id, hcris_reports.c.raw_line)
+                .where(hcris_reports.c.rpt_rec_num == 1001)
+                .order_by(hcris_reports.c.id)
+            )
+        )
+        assert len(report_rows) == 2  # neither physical row was dropped
+        first_id, last_id = report_rows[0].id, report_rows[1].id
+
+        numeric_report_ids = {
+            r.report_id
+            for r in conn.execute(
+                select(hcris_numeric).where(hcris_numeric.c.wksht_cd == "G000000")
+            )
+            if r.report_id in (first_id, last_id)
+        }
+        assert numeric_report_ids == {last_id}  # linked to the reprocessed row, not the first
 
 
 def test_a_runaway_download_is_stopped_before_it_fills_the_disk(tmp_path):

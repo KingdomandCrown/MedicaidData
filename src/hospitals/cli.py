@@ -1547,7 +1547,8 @@ def _cmd_fetch_hcris(args: argparse.Namespace) -> int:
             print(f"  already loaded: {summary.note}")
         else:
             print(
-                f"  loaded {summary.reports_loaded:,} report row(s), "
+                f"  loaded {summary.reports_loaded:,} report row(s) "
+                f"({summary.duplicate_reports:,} duplicate rpt_rec_num, last kept for linking), "
                 f"{summary.numeric_loaded:,} numeric row(s) "
                 f"({summary.orphan_numeric:,} orphaned), "
                 f"{summary.alpha_loaded:,} alpha row(s) "

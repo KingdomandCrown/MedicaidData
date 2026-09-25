@@ -299,10 +299,17 @@ standard_charges = Table(
 # -- a settled report replaces an as-submitted one for the *same*
 # rpt_rec_num as CMS finishes auditing it. Whether that ever changes the
 # numbers under an existing rpt_rec_num isn't something to guess at, so
-# nothing is overwritten or deduped across vintages: uniqueness is
-# (rpt_rec_num, vintage_year), meaning importing a second vintage keeps both
+# nothing is overwritten or deduped across vintages: a row is keyed by
+# (rpt_rec_num, vintage_year), and importing a second vintage keeps both
 # copies side by side rather than assuming which one is "right." Trending is
 # preserved by construction because nothing is ever deleted or replaced.
+#
+# rpt_rec_num is not even unique *within* one vintage: a reopened or
+# reprocessed report gets a new physical row in that release's Report file
+# without a new permanent id, and real releases do contain a handful of
+# these. Every physical row is stored regardless -- nothing about that is
+# this module's call to make -- so there is no uniqueness constraint here,
+# only an index for lookups.
 #
 # The Report file's own column layout is not verified against CMS's official
 # record layout, so it is deliberately not decoded here beyond the one field
@@ -315,12 +322,11 @@ hcris_reports = Table(
     "hcris_reports",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("rpt_rec_num", Integer, nullable=False),
+    Column("rpt_rec_num", Integer, nullable=False, index=True),
     Column("vintage_year", Integer, nullable=False, index=True),
     Column("raw_line", Text, nullable=False),
     Column("source_zip", String(255)),
     Column("ingested_at", DateTime),
-    UniqueConstraint("rpt_rec_num", "vintage_year", name="uq_hcris_report_vintage"),
 )
 
 hcris_numeric = Table(
