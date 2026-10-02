@@ -1678,11 +1678,12 @@ def _cmd_hcris_metrics(args: argparse.Namespace) -> int:
         "\nThe metrics computed so far cover revenue/expense components, the "
         "full balance sheet, Worksheet A-7 Part III (depreciation/lease/"
         "interest) and S-3 Part II (contract labor), bed/discharge "
-        "utilization, and uncompensated care. The 17 ratios these support "
-        "(margins, ROE/ROA, current/quick ratio, EBITDAR, days cash on hand, "
-        "average payment period, average age of plant, debt to net assets, "
-        "asset turnover, days in receivables, personnel expense pct) print "
-        "with --ccn."
+        "utilization, and uncompensated care. The 21 ratios these support "
+        "(margins incl. operating EBITDA, ROE/ROA, current/quick ratio, "
+        "EBITDAR, days cash on hand, average payment period, average age of "
+        "plant, cash to debt, debt to net assets, asset turnover, days in "
+        "receivables, personnel expense pct, occupancy, average length of "
+        "stay) print with --ccn."
     )
     return 0
 

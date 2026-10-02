@@ -19,6 +19,27 @@ hospitals file the General Fund column only and leave the other three blank
 -- per CMS's own instructions, a hospital completes the other fund columns
 only if it keeps fund-type accounting records -- so this undercounts only
 for that minority of filers rather than for a wrong reason.
+
+Occupancy and average length of stay are standard, unambiguous definitions
+(inpatient days / bed days available; inpatient days / discharges) built
+from Sacarny's adult-and-pediatric bed/discharge fields -- not AHD-sourced,
+since AHD's sheet doesn't cover utilization ratios, but there is no
+competing definition for either one to get wrong.
+
+Two ratios here are this module's own construction rather than a quoted
+external formula, because neither AHD nor AHA defines them -- flagged so
+they're not mistaken for equally source-verified:
+  * ``ebitda_margin_pct`` uses *operating* net income (net patient revenue
+    less operating expense, before non-operating items) plus interest and
+    depreciation, divided by net patient revenue -- matching the "Operating
+    EBITDA margin" label a consuming dashboard may show, as opposed to
+    AHD's EBITDAR (which starts from total net income and adds back lease
+    cost too).
+  * ``cash_to_debt_pct`` follows the hospital bond-rating-agency convention
+    (unrestricted cash, securities, and investments over long-term debt
+    specifically, not all liabilities) rather than a cost-report-specific
+    formula, since this ratio comes from credit-rating methodology, not the
+    cost report itself.
 """
 
 from __future__ import annotations
@@ -73,6 +94,10 @@ def compute_ratios(metrics: Metrics) -> dict[str, Decimal]:
     fringe_benefits = _num(metrics, "fringe_benefits")
     contract_labor_addon = _num(metrics, "contract_labor_addon")
     contract_labor_main = _num(metrics, "contract_labor_main")
+    net_income_from_patients = _num(metrics, "net_income_from_patients")
+    ipbeddays_adultped = _num(metrics, "ipbeddays_adultped")
+    availbeddays_adultped = _num(metrics, "availbeddays_adultped")
+    ipdischarges_adultped = _num(metrics, "ipdischarges_adultped")
 
     non_oper_rev = othinc  # AHD's "non-operating revenue" is G-3 line 25, same cell as othinc.
     net_assets = None
@@ -188,5 +213,30 @@ def compute_ratios(metrics: Metrics) -> dict[str, Decimal]:
                 "personnel_expense_pct",
                 (salary_expense + contract_labor + fringe_benefits) / netpatrev * 100,
             )
+
+    # Occupancy = inpatient bed days utilized / bed days available * 100
+    occupancy = _div(ipbeddays_adultped, availbeddays_adultped)
+    if occupancy is not None:
+        add("occupancy_pct", occupancy * 100)
+
+    # Average length of stay = inpatient bed days utilized / discharges
+    add("average_length_of_stay", _div(ipbeddays_adultped, ipdischarges_adultped))
+
+    # Operating EBITDA margin = (net income from patients + interest + depreciation) / net patient revenue * 100
+    if (
+        net_income_from_patients is not None
+        and interest_expense is not None
+        and depreciation_expense is not None
+        and netpatrev not in (None, Decimal(0))
+    ):
+        operating_ebitda = net_income_from_patients + interest_expense + depreciation_expense
+        add("ebitda_margin_pct", operating_ebitda / netpatrev * 100)
+
+    # Cash to debt = (cash + market securities + investments) / total long term liabilities * 100
+    if cash_on_hand is not None and market_securities is not None and investments is not None:
+        liquid = cash_on_hand + market_securities + investments
+        cash_to_debt = _div(liquid, total_long_term_liabilities)
+        if cash_to_debt is not None:
+            add("cash_to_debt_pct", cash_to_debt * 100)
 
     return ratios

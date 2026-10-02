@@ -38,6 +38,10 @@ FULL_METRICS = {
     "contract_labor_main": Decimal("15000"),
     "accum_depr_buildings": Decimal("300000"),
     "accum_depr_fixed_equipment": Decimal("60000"),
+    "net_income_from_patients": Decimal("100000"),
+    "ipbeddays_adultped": Decimal("18250"),
+    "availbeddays_adultped": Decimal("36500"),
+    "ipdischarges_adultped": Decimal("3650"),
 }
 
 
@@ -144,6 +148,44 @@ def test_personnel_expense_pct_needs_both_contract_labor_components():
     del metrics["contract_labor_addon"]
 
     assert "personnel_expense_pct" not in compute_ratios(metrics)
+
+
+def test_occupancy_and_average_length_of_stay():
+    ratios = compute_ratios(FULL_METRICS)
+    assert ratios["occupancy_pct"] == Decimal("18250") / Decimal("36500") * 100
+    assert ratios["average_length_of_stay"] == Decimal("18250") / Decimal("3650")
+
+
+def test_occupancy_is_absent_without_bed_day_data():
+    metrics = dict(FULL_METRICS)
+    del metrics["availbeddays_adultped"]
+
+    ratios = compute_ratios(metrics)
+    assert "occupancy_pct" not in ratios
+    assert "average_length_of_stay" in ratios  # unaffected by the missing field
+
+
+def test_ebitda_margin_uses_operating_net_income_not_total_net_income():
+    """Distinct from EBITDAR: no lease add-back, and based on net income
+    from patients (operating only), not AHD's total net income."""
+
+    ratios = compute_ratios(FULL_METRICS)
+    operating_ebitda = Decimal("100000") + Decimal("25000") + Decimal("45000")
+    assert ratios["ebitda_margin_pct"] == operating_ebitda / Decimal("1000000") * 100
+    assert ratios["ebitda_margin_pct"] != ratios["ebitdar"]  # not accidentally the same figure
+
+
+def test_cash_to_debt_uses_long_term_liabilities_not_total_liabilities():
+    ratios = compute_ratios(FULL_METRICS)
+    liquid = Decimal("100000") + Decimal("50000") + Decimal("200000")
+    assert ratios["cash_to_debt_pct"] == liquid / Decimal("600000") * 100
+
+
+def test_cash_to_debt_is_absent_without_long_term_liabilities():
+    metrics = dict(FULL_METRICS)
+    del metrics["total_long_term_liabilities"]
+
+    assert "cash_to_debt_pct" not in compute_ratios(metrics)
 
 
 def test_alpha_valued_metrics_are_ignored_not_divided():
