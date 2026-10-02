@@ -23,6 +23,7 @@ import csv
 import os
 import sys
 
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from . import __version__
@@ -35,13 +36,15 @@ from .db import (
     EmptyDatabase,
     count_charges,
     count_hospitals,
+    hcris_reports,
     init_db,
     make_engine,
     require_schema,
 )
 from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
-from .hcris_fetch import BASE_URL_TEMPLATE, EARLIEST_VINTAGE_YEAR, fetch_year
+from .hcris_fetch import BASE_URL_TEMPLATE, EARLIEST_VINTAGE_YEAR, backfill_report_fields, fetch_year
+from .hcris_metrics import compute_report_metrics, materialize_metrics
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
 from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
@@ -545,6 +548,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hcris.add_argument(
         "--timeout", type=int, default=300, help="Seconds per request (default: 300)."
+    )
+
+    hcrisfields = sub.add_parser(
+        "backfill-hcris-fields",
+        help="Decode ccn/status/dates on hcris_reports rows loaded before this "
+        "decode existed (one-time migration; safe to re-run).",
+    )
+    hcrisfields.add_argument("--database-url", default=DEFAULT_DB_URL)
+
+    hcrismetrics = sub.add_parser(
+        "hcris-metrics",
+        help="Decode HCRIS worksheet/line/column data into named financial "
+        "metrics, using the published Form 2552-10 crosswalk.",
+    )
+    hcrismetrics.add_argument("--database-url", default=DEFAULT_DB_URL)
+    hcrismetrics.add_argument(
+        "--vintage-year", type=int, default=None,
+        help="Materialize this one vintage's metrics into hcris_metric_values.",
+    )
+    hcrismetrics.add_argument(
+        "--all-years", action="store_true",
+        help="Materialize every vintage already present in hcris_reports.",
+    )
+    hcrismetrics.add_argument(
+        "--ccn", default=None,
+        help="Instead of materializing, print one hospital's decoded metrics "
+        "(optionally narrowed with --vintage-year).",
+    )
+    hcrismetrics.add_argument(
+        "--include-disabled", action="store_true",
+        help="Also compute metrics the upstream crosswalk itself flags as not "
+        "fully trusted. Off by default.",
     )
 
     chna = sub.add_parser(
@@ -1561,11 +1596,85 @@ def _cmd_fetch_hcris(args: argparse.Namespace) -> int:
         f"{totals.get('error', 0)} failed."
     )
     print(
-        "\nThis stores raw report/numeric/alpha rows only -- decoding WKSHT_CD/"
-        "LINE_NUM/CLMN_NUM into named financial metrics is a separate, later step."
+        "\nThis stores raw report/numeric/alpha rows plus CCN/status/dates "
+        "decoded from the Report file. Turning WKSHT_CD/LINE_NUM/CLMN_NUM into "
+        "named financial metrics is a separate step: hospitals hcris-metrics"
     )
     attempted = len(years)
     return 1 if totals.get("error", 0) and totals.get("error", 0) == attempted else 0
+
+
+def _cmd_backfill_hcris_fields(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    updated = backfill_report_fields(engine)
+    print(f"\nDecoded ccn/status/dates for {updated:,} hcris_reports row(s).")
+    return 0
+
+
+def _cmd_hcris_metrics(args: argparse.Namespace) -> int:
+    engine = make_engine(args.database_url)
+    require_schema(engine, args.database_url)
+    init_db(engine)  # hcris_metric_values is new; older vaults won't have it yet
+
+    if args.ccn:
+        query = select(
+            hcris_reports.c.id, hcris_reports.c.vintage_year, hcris_reports.c.rpt_rec_num,
+            hcris_reports.c.status_code, hcris_reports.c.fy_begin, hcris_reports.c.fy_end,
+        ).where(hcris_reports.c.ccn == args.ccn)
+        if args.vintage_year:
+            query = query.where(hcris_reports.c.vintage_year == args.vintage_year)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                query.order_by(hcris_reports.c.vintage_year, hcris_reports.c.id)
+            ).all()
+
+        if not rows:
+            print(f"\nNo HCRIS report rows found for CCN {args.ccn}"
+                  + (f" in vintage {args.vintage_year}." if args.vintage_year else "."))
+            return 0
+
+        for row in rows:
+            metrics = compute_report_metrics(engine, row.id, include_disabled=args.include_disabled)
+            print(
+                f"\nCCN {args.ccn}  vintage {row.vintage_year}  rpt_rec_num {row.rpt_rec_num}  "
+                f"status {row.status_code}  FY {row.fy_begin}..{row.fy_end}"
+            )
+            if not metrics:
+                print("  (no crosswalk metrics matched -- this report may not have filed those worksheets)")
+            for key in sorted(metrics):
+                print(f"  {key:<22} {metrics[key]}")
+        return 0
+
+    if args.all_years:
+        with engine.connect() as conn:
+            years = sorted(
+                {r[0] for r in conn.execute(select(hcris_reports.c.vintage_year).distinct())}
+            )
+    elif args.vintage_year:
+        years = [args.vintage_year]
+    else:
+        print("\nERROR: pass --vintage-year, --all-years, or --ccn.", file=sys.stderr)
+        return 2
+
+    print(f"\nMaterializing HCRIS metrics for {len(years)} vintage(s) into {args.database_url}.")
+    total_reports = total_values = 0
+    for n, year in enumerate(years, 1):
+        summary = materialize_metrics(engine, vintage_year=year, include_disabled=args.include_disabled)
+        total_reports += summary.reports_processed
+        total_values += summary.values_written
+        print(
+            f"  [{n}/{len(years)}] vintage {year}: {summary.reports_processed:,} report(s), "
+            f"{summary.values_written:,} value(s)"
+        )
+    print(f"\n{total_reports:,} report(s) processed, {total_values:,} metric value(s) written.")
+    print(
+        "\nThe metrics computed so far cover revenue/expense components, bed/"
+        "discharge utilization, and uncompensated care -- not yet liquidity "
+        "ratios (days cash on hand, current ratio) or FTE/staffing, which need "
+        "a verified hospital-specific Worksheet G / S-3 Part II source."
+    )
+    return 0
 
 
 def _cmd_ingest_chna(args: argparse.Namespace) -> int:
@@ -1796,6 +1905,10 @@ def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return _cmd_fetch_service_area(args)
     if args.command == "fetch-hcris":
         return _cmd_fetch_hcris(args)
+    if args.command == "backfill-hcris-fields":
+        return _cmd_backfill_hcris_fields(args)
+    if args.command == "hcris-metrics":
+        return _cmd_hcris_metrics(args)
     if args.command == "service-area":
         return _cmd_service_area(args)
     if args.command == "ingest-chna":

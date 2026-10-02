@@ -10,6 +10,7 @@ vintage (a reopened report), which a hard uniqueness constraint on
 regardless.
 """
 
+import datetime as dt
 import io
 import os
 import zipfile
@@ -18,7 +19,20 @@ import pytest
 from sqlalchemy import select
 
 from hospitals.db import hcris_alpha, hcris_numeric, hcris_reports, init_db, make_engine
-from hospitals.hcris_fetch import HcrisLayoutError, _classify_members, fetch_year
+from hospitals.hcris_fetch import (
+    HcrisLayoutError,
+    _classify_members,
+    backfill_report_fields,
+    decode_report_fields,
+    fetch_year,
+)
+
+# A real row from hcris_reports.raw_line (vintage 2012), used to verify the
+# field layout against actual production data rather than a synthetic sample.
+REAL_REPORT_LINE = (
+    "7716,4,330409,,2,10/17/2011,12/31/2011,08/28/2012,N,N,A,00130,4,"
+    "08/28/2012,L,08/20/2012,,06/18/2012"
+)
 
 REPORT_LINES = "1001,S1,20260101\r\n1002,S1,20260101\r\n"
 # rpt_rec_num, wksht_cd, line_num, clmn_num, value -- 9999 has no matching report.
@@ -83,6 +97,35 @@ def test_classify_members_fails_loudly_when_a_role_is_missing():
 def test_classify_members_fails_loudly_on_an_ambiguous_role():
     with pytest.raises(HcrisLayoutError, match="report"):
         _classify_members(["a_RPT.CSV", "b_RPT.CSV", "c_NMRC.CSV", "d_ALPHA.CSV"])
+
+
+def test_decode_report_fields_matches_a_real_production_row():
+    decoded = decode_report_fields(REAL_REPORT_LINE)
+
+    assert decoded == {
+        "ccn": "330409",
+        "status_code": "2",
+        "fy_begin": dt.date(2011, 10, 17),
+        "fy_end": dt.date(2011, 12, 31),
+        "proc_date": dt.date(2012, 8, 28),
+    }
+
+
+def test_decode_report_fields_tolerates_a_short_or_malformed_line():
+    assert decode_report_fields("not,enough,fields") == {
+        "ccn": "not,enough,fields".split(",")[2],
+        "status_code": None,
+        "fy_begin": None,
+        "fy_end": None,
+        "proc_date": None,
+    }
+    assert decode_report_fields("") == {
+        "ccn": None,
+        "status_code": None,
+        "fy_begin": None,
+        "fy_end": None,
+        "proc_date": None,
+    }
 
 
 def test_a_vintage_loads_reports_numeric_and_alpha_rows(tmp_path):
@@ -252,3 +295,55 @@ def test_a_runaway_download_is_stopped_before_it_fills_the_disk(tmp_path):
         fetch_year(engine, 2026, cache_dir=str(tmp_path / "cache"), opener=opener, max_bytes=5000)
 
     assert list((tmp_path / "cache").iterdir()) == []  # no partial file left behind
+
+
+def test_fetch_year_decodes_ccn_and_dates_on_real_shaped_rows(tmp_path):
+    engine = _engine(tmp_path)
+    second_line = REAL_REPORT_LINE.replace("7716", "7717").replace("330409", "140001")
+    zip_with_real_rows = _zip_bytes(
+        {
+            "hosp10_2012_RPT.CSV": REAL_REPORT_LINE + "\r\n" + second_line + "\r\n",
+            "hosp10_2012_NMRC.CSV": "7716,G000000,1,1,100\r\n",
+            "hosp10_2012_ALPHA.CSV": "7716,S200001,300,1,Some Hospital\r\n",
+        }
+    )
+
+    fetch_year(engine, 2012, cache_dir=str(tmp_path / "cache"), opener=_opener(zip_with_real_rows))
+
+    with engine.connect() as conn:
+        report = conn.execute(
+            select(hcris_reports).where(hcris_reports.c.rpt_rec_num == 7716)
+        ).one()
+    assert report.ccn == "330409"
+    assert report.status_code == "2"
+    assert report.fy_begin == dt.date(2011, 10, 17)
+    assert report.fy_end == dt.date(2011, 12, 31)
+    assert report.proc_date == dt.date(2012, 8, 28)
+
+
+def test_backfill_report_fields_decodes_rows_loaded_before_the_decode_existed(tmp_path):
+    """Simulates the live vault's 91,827 already-loaded rows from before this
+    decode shipped: raw_line is there, the new columns are still NULL."""
+
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(
+            hcris_reports.insert(),
+            [
+                {
+                    "rpt_rec_num": 7716,
+                    "vintage_year": 2012,
+                    "raw_line": REAL_REPORT_LINE,
+                    "source_zip": "HOSP10FY2012.ZIP",
+                    "ingested_at": None,
+                }
+            ],
+        )
+
+    updated = backfill_report_fields(engine)
+    assert updated == 1
+
+    with engine.connect() as conn:
+        report = conn.execute(select(hcris_reports)).one()
+    assert report.ccn == "330409"
+    assert report.fy_end == dt.date(2011, 12, 31)

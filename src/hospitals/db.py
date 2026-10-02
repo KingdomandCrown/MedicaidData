@@ -311,13 +311,18 @@ standard_charges = Table(
 # this module's call to make -- so there is no uniqueness constraint here,
 # only an index for lookups.
 #
-# The Report file's own column layout is not verified against CMS's official
-# record layout, so it is deliberately not decoded here beyond the one field
-# every documented source agrees is first: RPT_REC_NUM. Everything else in
-# that row is kept as the untouched original line rather than asserted into
-# named fields that might be wrong. Numeric and Alpha both use CMS's
-# well-established, universally-documented 5-column shape (RPT_REC_NUM,
-# WKSHT_CD, LINE_NUM, CLMN_NUM, VALUE), so those are decoded directly.
+# The Report file's layout beyond RPT_REC_NUM was originally left undecoded
+# because it wasn't verified against CMS's official record layout. It now is:
+# the field positions below (PRVDR_NUM/CCN, RPT_STUS_CD, the three dates) match
+# the standard, widely-documented 18-field HCRIS RPT layout used by every open
+# HCRIS tool, confirmed directly against this project's own stored raw_line
+# values (UTIL_CD at index 14 takes exactly {F, L, N}; RPT_STUS_CD at index 4
+# takes exactly {1, 2, 3, 4}; PRVDR_NUM at index 2 matches real CCNs). raw_line
+# itself is kept verbatim regardless, so decoding these few fields asserts
+# nothing that can't be re-derived or corrected later. Numeric and Alpha both
+# use CMS's well-established, universally-documented 5-column shape
+# (RPT_REC_NUM, WKSHT_CD, LINE_NUM, CLMN_NUM, VALUE), so those are decoded
+# directly.
 hcris_reports = Table(
     "hcris_reports",
     metadata,
@@ -327,6 +332,14 @@ hcris_reports = Table(
     Column("raw_line", Text, nullable=False),
     Column("source_zip", String(255)),
     Column("ingested_at", DateTime),
+    # Decoded from raw_line (see decode_report_fields in hcris_fields.py).
+    # Nullable: a row loaded before this decode existed has these backfilled
+    # separately, and a line too malformed to parse just leaves them unset.
+    Column("ccn", String(6), index=True),
+    Column("status_code", String(2)),
+    Column("fy_begin", Date),
+    Column("fy_end", Date),
+    Column("proc_date", Date),
 )
 
 hcris_numeric = Table(
@@ -361,6 +374,28 @@ hcris_alpha = Table(
     Column("line_num", String(10)),
     Column("clmn_num", String(10)),
     Column("value", Text),
+)
+
+# Named financial/operational metrics decoded from hcris_numeric/hcris_alpha
+# via the crosswalk in hcris_crosswalk.py (see hcris_metrics.py). This is
+# materialized, derived data -- always safe to delete and recompute from the
+# raw tables above, never a primary source of truth itself. value_numeric and
+# value_text are mutually exclusive, decided by the crosswalk entry's type.
+hcris_metric_values = Table(
+    "hcris_metric_values",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "report_id",
+        Integer,
+        ForeignKey("hcris_reports.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    ),
+    Column("metric", String(40), index=True, nullable=False),
+    Column("value_numeric", Numeric(20, 4)),
+    Column("value_text", Text),
+    UniqueConstraint("report_id", "metric", name="uq_hcris_metric_value"),
 )
 
 # Columns that get overwritten on conflict (everything except the PK).

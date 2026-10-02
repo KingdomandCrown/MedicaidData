@@ -17,13 +17,16 @@ last one in the file (by insertion order) is what Numeric/Alpha rows attach
 to, since a reopened report supersedes its earlier version and CMS's Numeric/
 Alpha files carry only one dataset per ``rpt_rec_num`` anyway.
 
-The Report file's own column layout is not decoded beyond RPT_REC_NUM, the one
-field every documented source agrees on — everything else in that row is kept
-as the untouched original line rather than asserted into named fields that
-might be wrong. Numeric and Alpha both use CMS's well-established, universally
-documented 5-column shape (RPT_REC_NUM, WKSHT_CD, LINE_NUM, CLMN_NUM, VALUE),
-so those are decoded directly. Turning WKSHT_CD/LINE_NUM/CLMN_NUM into named
-financial metrics is a judgment call for later, not this module.
+The Report file's layout is decoded for RPT_REC_NUM plus a handful of fields
+confirmed against the standard, widely-documented HCRIS RPT shape and against
+this project's own stored data (CCN, status code, the three report dates) --
+see decode_report_fields. raw_line keeps the untouched original line
+regardless, so nothing is lost if that decode is ever wrong. Numeric and Alpha
+both use CMS's well-established, universally documented 5-column shape
+(RPT_REC_NUM, WKSHT_CD, LINE_NUM, CLMN_NUM, VALUE), so those are decoded
+directly. Turning WKSHT_CD/LINE_NUM/CLMN_NUM into named financial metrics is
+handled by hcris_metrics.py, using a crosswalk sourced from published
+academic tooling rather than guessed.
 """
 
 from __future__ import annotations
@@ -38,12 +41,13 @@ from dataclasses import dataclass
 from typing import Sequence
 from urllib.parse import urlparse
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import bindparam, func, insert, select
 from sqlalchemy.engine import Engine
 
 from .db import hcris_alpha, hcris_numeric, hcris_reports
 from .logging_config import get_logger
 from .mrf_fetch import requests_opener
+from .normalize import parse_date
 from .price_transparency import clean_text, detect_delimiter, detect_encoding, to_decimal
 
 log = get_logger(__name__)
@@ -175,9 +179,77 @@ def _text_stream(zf: zipfile.ZipFile, member: str):
     return io.TextIOWrapper(raw, encoding=encoding, newline="", errors="replace")
 
 
+#: The HCRIS RPT file is an 18-field, unlabeled flat file; position decides
+#: meaning. These five (0-indexed) are the standard, widely-documented layout
+#: used by every open HCRIS tool, confirmed directly against this project's
+#: own stored raw_line values: UTIL_CD (index 14) only ever takes {F, L, N},
+#: RPT_STUS_CD (index 4) only ever takes {1, 2, 3, 4}, and PRVDR_NUM (index 2)
+#: matches real CCNs already in the hospitals table.
+_CCN_FIELD = 2
+_STUS_FIELD = 4
+_FY_BEGIN_FIELD = 5
+_FY_END_FIELD = 6
+_PROC_DATE_FIELD = 7
+
+
+def decode_report_fields(raw_line: str, delimiter: str = ",") -> dict:
+    """Pull CCN, status code, and the three report dates out of a Report row.
+
+    raw_line is kept verbatim regardless of what this finds, so a line with
+    fewer fields than expected (or one of these fields blank) just leaves the
+    corresponding value None rather than raising and losing the whole row.
+    """
+
+    fields = raw_line.split(delimiter)
+
+    def field(i: int) -> str | None:
+        return fields[i].strip() if i < len(fields) and fields[i].strip() else None
+
+    return {
+        "ccn": field(_CCN_FIELD),
+        "status_code": field(_STUS_FIELD),
+        "fy_begin": parse_date(field(_FY_BEGIN_FIELD)),
+        "fy_end": parse_date(field(_FY_END_FIELD)),
+        "proc_date": parse_date(field(_PROC_DATE_FIELD)),
+    }
+
+
+def backfill_report_fields(engine: Engine, batch_size: int = 5000) -> int:
+    """Decode ccn/status_code/fy_begin/fy_end/proc_date for rows stored before
+    decode_report_fields existed. Idempotent -- re-decodes from raw_line every
+    time rather than skipping already-filled rows, so it's also how a fixed
+    decode gets applied retroactively.
+
+    Every HCRIS release seen so far is comma-delimited, and the original
+    per-vintage delimiter isn't stored alongside raw_line, so this assumes a
+    comma rather than re-sniffing one line at a time.
+    """
+
+    updated = 0
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(hcris_reports.c.id, hcris_reports.c.raw_line)
+        ).fetchall()
+        stmt = hcris_reports.update().where(hcris_reports.c.id == bindparam("_id"))
+        batch: list[dict] = []
+        for row in rows:
+            decoded = decode_report_fields(row.raw_line, ",")
+            decoded["_id"] = row.id
+            batch.append(decoded)
+            if len(batch) >= batch_size:
+                conn.execute(stmt, batch)
+                updated += len(batch)
+                batch = []
+        if batch:
+            conn.execute(stmt, batch)
+            updated += len(batch)
+    return updated
+
+
 def _load_report_file(conn, zf: zipfile.ZipFile, member: str, *, vintage_year: int,
                        source_zip: str, batch_size: int) -> int:
-    """Insert every report row, decoding only RPT_REC_NUM; the rest is kept verbatim."""
+    """Insert every report row, decoding RPT_REC_NUM plus a few metadata
+    fields; raw_line keeps the untouched original regardless."""
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     loaded = 0
@@ -194,15 +266,15 @@ def _load_report_file(conn, zf: zipfile.ZipFile, member: str, *, vintage_year: i
                 rpt_rec_num = int(first_field)
             except ValueError:
                 continue
-            batch.append(
-                {
-                    "rpt_rec_num": rpt_rec_num,
-                    "vintage_year": vintage_year,
-                    "raw_line": line,
-                    "source_zip": source_zip,
-                    "ingested_at": now,
-                }
-            )
+            row = {
+                "rpt_rec_num": rpt_rec_num,
+                "vintage_year": vintage_year,
+                "raw_line": line,
+                "source_zip": source_zip,
+                "ingested_at": now,
+            }
+            row.update(decode_report_fields(line, delimiter))
+            batch.append(row)
             if len(batch) >= batch_size:
                 conn.execute(insert(hcris_reports), batch)
                 loaded += len(batch)
