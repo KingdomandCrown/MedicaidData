@@ -70,6 +70,46 @@ def test_compute_report_metrics_reads_worksheet_g_balance_sheet_lines(tmp_path):
     assert metrics["net_income"] == Decimal("150000.0000")
 
 
+def test_compute_report_metrics_reads_worksheet_a_a7_and_s3_part_ii(tmp_path):
+    """A700003 (A-7 Part III) and S300002 (S-3 Part II) weren't named by
+    either published source -- they were confirmed against this project's
+    own stored data, so the shape here mirrors the real worksheet exactly:
+    A-7 Part III's figures all sit on line 3, distinguished only by column."""
+
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        report_id = _seed_report(conn, rpt_rec_num=5020, vintage_year=2024, ccn="170050")
+        conn.execute(
+            hcris_numeric.insert(),
+            [
+                {"report_id": report_id, "wksht_cd": "A000000", "clmn_num": "00100",
+                 "line_num": "20000", "value": Decimal("400000")},  # salary_expense
+                {"report_id": report_id, "wksht_cd": "A000000", "clmn_num": "00200",
+                 "line_num": "00400", "value": Decimal("80000")},  # fringe_benefits
+                {"report_id": report_id, "wksht_cd": "A700003", "clmn_num": "00900",
+                 "line_num": "00300", "value": Decimal("45000")},  # depreciation_expense
+                {"report_id": report_id, "wksht_cd": "A700003", "clmn_num": "01000",
+                 "line_num": "00300", "value": Decimal("10000")},  # lease_cost
+                {"report_id": report_id, "wksht_cd": "A700003", "clmn_num": "01100",
+                 "line_num": "00300", "value": Decimal("25000")},  # interest_expense
+                {"report_id": report_id, "wksht_cd": "S300002", "clmn_num": "00400",
+                 "line_num": "00701", "value": Decimal("5000")},  # contract_labor_addon
+                {"report_id": report_id, "wksht_cd": "S300002", "clmn_num": "00400",
+                 "line_num": "01200", "value": Decimal("15000")},  # contract_labor_main
+            ],
+        )
+
+    metrics = compute_report_metrics(engine, report_id)
+
+    assert metrics["salary_expense"] == Decimal("400000.0000")
+    assert metrics["fringe_benefits"] == Decimal("80000.0000")
+    assert metrics["depreciation_expense"] == Decimal("45000.0000")
+    assert metrics["lease_cost"] == Decimal("10000.0000")
+    assert metrics["interest_expense"] == Decimal("25000.0000")
+    assert metrics["contract_labor_addon"] == Decimal("5000.0000")
+    assert metrics["contract_labor_main"] == Decimal("15000.0000")
+
+
 def test_compute_report_metrics_reads_single_line_and_summed_range(tmp_path):
     engine = _engine(tmp_path)
     with engine.begin() as conn:

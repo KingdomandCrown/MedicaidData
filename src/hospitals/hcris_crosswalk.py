@@ -12,18 +12,31 @@ published, hospital-specific sources back every entry here, not a guess:
   https://github.com/asacarny/hospital-cost-reports, ``lookup.xlsx`` -- an
   openly published, actively maintained academic tool already used in
   published health-economics research.
-* The Worksheet G (balance sheet) and additional Worksheet G-3 entries are
-  carried over from American Hospital Directory's ``FinIndWorksheetRef_2552-
-  10.pdf`` and the AHA DataQuery Cost Report Fields Dictionary -- both name
-  the exact worksheet/line/column for the 2010 hospital form specifically
-  (not skilled-nursing, which uses the same worksheet letters for different
+* The Worksheet G (balance sheet), additional Worksheet G-3 entries, and the
+  Worksheet A / A-7 Part III / S-3 Part II entries are carried over from
+  American Hospital Directory's ``FinIndWorksheetRef_2552-10.pdf`` and the
+  AHA DataQuery Cost Report Fields Dictionary -- both name the exact
+  worksheet/line/column for the 2010 hospital form specifically (not
+  skilled-nursing, which uses the same worksheet letters for different
   content). Several lines overlap and agree with Sacarny's entries
   (donations at G-3 line 6, investment income at line 7, net patient revenue
   at line 3, total operating expense at line 4), which is corroborating
   cross-confirmation between the two independent sources, not a coincidence.
 
-A wrong mapping is a bug in one of those upstream sources to fix at the
-source, not a judgment call made here.
+Neither source states the raw WKSHT_CD for Worksheet A-7 Part III or
+Worksheet S-3 Part II (they cite worksheets by name only), so those two were
+confirmed directly against this project's own stored data: querying the
+distinct (wksht_cd, column range, line range) actually present turned up
+``A700003`` (columns 1-15, lines 1-3 -- exactly matching AHD's "A-7, part 3,
+line 3, col 9/10/11", and following the identical ``A700001``/``A700002``
+Part I/II pattern already visible alongside it) and ``S300002`` (columns
+1-6, lines 1-43 -- matching AHD's "S-3, part 2, lines 7.01/11-16, col 4",
+alongside the already-confirmed ``S300001`` for Part I). Every line/column
+this crosswalk uses from those two codes falls inside the observed range,
+which would be a remarkable coincidence if either code were wrong.
+
+A wrong mapping is a bug in one of those upstream sources (or in this
+project's own data) to fix at the source, not a judgment call made here.
 
 Each entry names one worksheet/column/line coordinate. When ``line_end`` is
 set, the metric is the *sum* of every line from ``line_start`` to
@@ -33,17 +46,10 @@ carried over as disabled rather than dropped -- that is the upstream
 project's own judgment about which lines it does not trust, not something to
 silently drop or silently promote.
 
-Ratios built from these base figures (current ratio, operating margin, return
-on assets, etc.) are computed in ``hcris_ratios.py``, not asserted as their
-own crosswalk entries -- dividing two already-verified cells is arithmetic,
-not a worksheet lookup.
-
-Still missing, pending a verified hospital-specific source: EBITDAR, days
-cash on hand, average payment period, and average age of plant all need
-Worksheet A-7 Part 3's depreciation/interest/lease lines, and FTE/staffing
-ratios need Worksheet S-3 Part II -- neither AHD's financial-indicator sheet
-nor the AHA glossary names that worksheet's own WKSHT_CD, so nothing for
-either is guessed here.
+Ratios built from these base figures (current ratio, operating margin, EBITDAR,
+days cash on hand, etc.) are computed in ``hcris_ratios.py``, not asserted as
+their own crosswalk entries -- dividing two already-verified cells is
+arithmetic, not a worksheet lookup.
 """
 
 from __future__ import annotations
@@ -178,6 +184,17 @@ CROSSWALK: tuple[CrosswalkEntry, ...] = (
     CrosswalkEntry('net_income_from_patients', 'net income from service to patients (net patient revenue less total operating expenses)', 'dollar_flow', 'G300000', '00100', '00500', None, True),
     CrosswalkEntry('total_income', 'total income (net income from patients plus total other income)', 'dollar_flow', 'G300000', '00100', '02600', None, True),
     CrosswalkEntry('net_income', 'net income (or loss) for the period', 'dollar_flow', 'G300000', '00100', '02900', None, True),
+
+    # Worksheet A (A000000), A-7 Part III (A700003), and S-3 Part II
+    # (S300002) -- see module docstring for how the latter two codes were
+    # confirmed, since neither AHD nor AHA names them directly.
+    CrosswalkEntry('salary_expense', 'total salaries (worksheet A, line 200, col 1)', 'dollar_flow', 'A000000', '00100', '20000', None, True),
+    CrosswalkEntry('fringe_benefits', 'employee benefits (worksheet A, line 4, col 2)', 'dollar_flow', 'A000000', '00200', '00400', None, True),
+    CrosswalkEntry('depreciation_expense', 'depreciation and amortization expense (worksheet A-7 part III, line 3, col 9)', 'dollar_flow', 'A700003', '00900', '00300', None, True),
+    CrosswalkEntry('lease_cost', 'lease cost (worksheet A-7 part III, line 3, col 10)', 'dollar_flow', 'A700003', '01000', '00300', None, True),
+    CrosswalkEntry('interest_expense', 'interest expense (worksheet A-7 part III, line 3, col 11)', 'dollar_flow', 'A700003', '01100', '00300', None, True),
+    CrosswalkEntry('contract_labor_addon', 'contract labor, add-on line 7.01 (worksheet S-3 part II, col 4)', 'dollar_flow', 'S300002', '00400', '00701', None, True),
+    CrosswalkEntry('contract_labor_main', 'contract labor, lines 11-16 (worksheet S-3 part II, col 4)', 'dollar_flow', 'S300002', '00400', '01100', '01600', True),
 )
 # fmt: on
 

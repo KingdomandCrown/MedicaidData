@@ -25,6 +25,19 @@ FULL_METRICS = {
     "other_receivables": Decimal("5000"),
     "allow_uncollectible": Decimal("20000"),
     "total_long_term_liabilities": Decimal("600000"),
+    "othexp": Decimal("20000"),
+    "cash_on_hand": Decimal("100000"),
+    "market_securities": Decimal("50000"),
+    "investments": Decimal("200000"),
+    "depreciation_expense": Decimal("45000"),
+    "lease_cost": Decimal("10000"),
+    "interest_expense": Decimal("25000"),
+    "salary_expense": Decimal("400000"),
+    "fringe_benefits": Decimal("80000"),
+    "contract_labor_addon": Decimal("5000"),
+    "contract_labor_main": Decimal("15000"),
+    "accum_depr_buildings": Decimal("300000"),
+    "accum_depr_fixed_equipment": Decimal("60000"),
 }
 
 
@@ -79,6 +92,58 @@ def test_a_zero_denominator_is_absent_not_a_zero_division_error():
 
 def test_no_metrics_at_all_yields_no_ratios():
     assert compute_ratios({}) == {}
+
+
+def test_ebitdar_matches_the_ahd_formula():
+    # net income + interest + depreciation + lease cost
+    ratios = compute_ratios(FULL_METRICS)
+    assert ratios["ebitdar"] == Decimal("150000") + Decimal("25000") + Decimal("45000") + Decimal("10000")
+
+
+def test_days_cash_on_hand_and_all_sources_variant():
+    ratios = compute_ratios(FULL_METRICS)
+    oper_exp_less_depr = Decimal("900000") - Decimal("45000")
+    assert ratios["days_cash_on_hand"] == (Decimal("100000") + Decimal("50000")) / (oper_exp_less_depr / 365)
+    assert ratios["days_cash_on_hand_all_sources"] == (
+        Decimal("100000") + Decimal("50000") + Decimal("200000")
+    ) / (oper_exp_less_depr / 365)
+
+
+def test_average_payment_period_matches_the_ahd_formula():
+    ratios = compute_ratios(FULL_METRICS)
+    denom = (Decimal("900000") + Decimal("20000") - Decimal("45000")) / 365
+    assert ratios["average_payment_period_days"] == Decimal("250000") / denom
+
+
+def test_average_age_of_plant_sums_the_accumulated_depreciation_lines_present():
+    ratios = compute_ratios(FULL_METRICS)
+    # Only accum_depr_buildings and accum_depr_fixed_equipment are set in
+    # FULL_METRICS -- the other five accumulated-depreciation lines this
+    # hospital never filed contribute nothing, not a zero that would be
+    # indistinguishable from "filed and zero."
+    assert ratios["average_age_of_plant"] == (Decimal("300000") + Decimal("60000")) / Decimal("45000")
+
+
+def test_average_age_of_plant_is_absent_when_no_accumulated_depreciation_line_is_present():
+    metrics = dict(FULL_METRICS)
+    del metrics["accum_depr_buildings"]
+    del metrics["accum_depr_fixed_equipment"]
+
+    assert "average_age_of_plant" not in compute_ratios(metrics)
+
+
+def test_personnel_expense_pct_sums_both_contract_labor_components():
+    ratios = compute_ratios(FULL_METRICS)
+    contract_labor = Decimal("5000") + Decimal("15000")
+    expected = (Decimal("400000") + contract_labor + Decimal("80000")) / Decimal("1000000") * 100
+    assert ratios["personnel_expense_pct"] == expected
+
+
+def test_personnel_expense_pct_needs_both_contract_labor_components():
+    metrics = dict(FULL_METRICS)
+    del metrics["contract_labor_addon"]
+
+    assert "personnel_expense_pct" not in compute_ratios(metrics)
 
 
 def test_alpha_valued_metrics_are_ignored_not_divided():

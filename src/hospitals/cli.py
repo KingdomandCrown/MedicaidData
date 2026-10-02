@@ -1676,14 +1676,13 @@ def _cmd_hcris_metrics(args: argparse.Namespace) -> int:
     print(f"\n{total_reports:,} report(s) processed, {total_values:,} metric value(s) written.")
     print(
         "\nThe metrics computed so far cover revenue/expense components, the "
-        "full balance sheet, bed/discharge utilization, and uncompensated "
-        "care. The ratios these support (current/quick ratio, operating/"
-        "excess margin, ROE/ROA, debt to net assets, asset turnover, days in "
-        "receivables) print with --ccn. Still missing: EBITDAR, days cash on "
-        "hand, average payment period, and average age of plant (need "
-        "Worksheet A-7 Part 3) and FTE/staffing (need Worksheet S-3 Part II) "
-        "-- neither worksheet's code is confirmed from a hospital-specific "
-        "source yet."
+        "full balance sheet, Worksheet A-7 Part III (depreciation/lease/"
+        "interest) and S-3 Part II (contract labor), bed/discharge "
+        "utilization, and uncompensated care. The 17 ratios these support "
+        "(margins, ROE/ROA, current/quick ratio, EBITDAR, days cash on hand, "
+        "average payment period, average age of plant, debt to net assets, "
+        "asset turnover, days in receivables, personnel expense pct) print "
+        "with --ccn."
     )
     return 0
 
