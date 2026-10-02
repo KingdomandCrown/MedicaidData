@@ -2,15 +2,28 @@
 
 ``hcris_numeric``/``hcris_alpha`` store CMS's own opaque (WKSHT_CD, LINE_NUM,
 CLMN_NUM) coordinates verbatim -- deliberately undecoded, since guessing a
-wrong line number would silently corrupt a financial figure. This crosswalk
-is not a guess: it is carried over verbatim (fmt=10 rows only, since every
-HOSP10FY<year>.ZIP release this project loads covers exclusively hospitals
-filing the 2010 form version) from Adam Sacarny's ``hospital-cost-reports``
-project -- https://github.com/asacarny/hospital-cost-reports, ``lookup.xlsx``
--- an openly published, actively maintained academic tool already used in
-published health-economics research. Nothing here is re-derived or guessed;
-a wrong mapping is a bug in that upstream project to fix there, not a
-judgment call made here.
+wrong line number would silently corrupt a financial figure. Two independent,
+published, hospital-specific sources back every entry here, not a guess:
+
+* The ``netpatrev``/``opexp``/beds/discharges/uncompensated-care entries are
+  carried over verbatim (fmt=10 rows only, since every HOSP10FY<year>.ZIP
+  release this project loads covers exclusively hospitals filing the 2010
+  form version) from Adam Sacarny's ``hospital-cost-reports`` project --
+  https://github.com/asacarny/hospital-cost-reports, ``lookup.xlsx`` -- an
+  openly published, actively maintained academic tool already used in
+  published health-economics research.
+* The Worksheet G (balance sheet) and additional Worksheet G-3 entries are
+  carried over from American Hospital Directory's ``FinIndWorksheetRef_2552-
+  10.pdf`` and the AHA DataQuery Cost Report Fields Dictionary -- both name
+  the exact worksheet/line/column for the 2010 hospital form specifically
+  (not skilled-nursing, which uses the same worksheet letters for different
+  content). Several lines overlap and agree with Sacarny's entries
+  (donations at G-3 line 6, investment income at line 7, net patient revenue
+  at line 3, total operating expense at line 4), which is corroborating
+  cross-confirmation between the two independent sources, not a coincidence.
+
+A wrong mapping is a bug in one of those upstream sources to fix at the
+source, not a judgment call made here.
 
 Each entry names one worksheet/column/line coordinate. When ``line_end`` is
 set, the metric is the *sum* of every line from ``line_start`` to
@@ -20,12 +33,17 @@ carried over as disabled rather than dropped -- that is the upstream
 project's own judgment about which lines it does not trust, not something to
 silently drop or silently promote.
 
-This is deliberately a narrower set than a complete HFMA-style ratio
-dashboard: liquidity ratios (days cash on hand, current ratio, debt to
-capitalization, average age of plant) need Worksheet G (the balance sheet)
-and FTE/staffing ratios need Worksheet S-3 Part II, neither of which is in
-this crosswalk yet pending a verified hospital-specific (not skilled-nursing)
-source for those line numbers.
+Ratios built from these base figures (current ratio, operating margin, return
+on assets, etc.) are computed in ``hcris_ratios.py``, not asserted as their
+own crosswalk entries -- dividing two already-verified cells is arithmetic,
+not a worksheet lookup.
+
+Still missing, pending a verified hospital-specific source: EBITDAR, days
+cash on hand, average payment period, and average age of plant all need
+Worksheet A-7 Part 3's depreciation/interest/lease lines, and FTE/staffing
+ratios need Worksheet S-3 Part II -- neither AHD's financial-indicator sheet
+nor the AHA glossary names that worksheet's own WKSHT_CD, so nothing for
+either is guessed here.
 """
 
 from __future__ import annotations
@@ -93,6 +111,73 @@ CROSSWALK: tuple[CrosswalkEntry, ...] = (
     CrosswalkEntry('typ_control', 'type of control', 'alpha', 'S200001', '00100', '02100', None, True),
     CrosswalkEntry('hospital_name', 'name of hospital', 'alpha', 'S200001', '00100', '00300', None, True),
     CrosswalkEntry('chain_name', 'name of chain organization', 'alpha', 'S200001', '00100', '14100', None, True),
+
+    # Worksheet G (balance sheet) and additional Worksheet G-3 lines, sourced
+    # from AHD's FinIndWorksheetRef_2552-10.pdf and the AHA DataQuery Cost
+    # Report Fields Dictionary (see module docstring).
+    CrosswalkEntry('cash_on_hand', 'cash on hand and in banks', 'stock', 'G000000', '00100', '00100', None, True),
+    CrosswalkEntry('market_securities', 'temporary investments / marketable securities', 'stock', 'G000000', '00100', '00200', None, True),
+    CrosswalkEntry('notes_receivable', 'notes receivable', 'stock', 'G000000', '00100', '00300', None, True),
+    CrosswalkEntry('accounts_receivable', 'accounts receivable', 'stock', 'G000000', '00100', '00400', None, True),
+    CrosswalkEntry('other_receivables', 'other receivables', 'stock', 'G000000', '00100', '00500', None, True),
+    CrosswalkEntry('allow_uncollectible', 'allowances for uncollectible notes and accounts receivable (contra-asset)', 'stock', 'G000000', '00100', '00600', None, True),
+    CrosswalkEntry('inventory', 'inventory', 'stock', 'G000000', '00100', '00700', None, True),
+    CrosswalkEntry('prepaid_expenses', 'prepaid expenses', 'stock', 'G000000', '00100', '00800', None, True),
+    CrosswalkEntry('other_current_assets', 'other current assets', 'stock', 'G000000', '00100', '00900', None, True),
+    CrosswalkEntry('due_from_other_funds', 'due from other funds', 'stock', 'G000000', '00100', '01000', None, True),
+    CrosswalkEntry('total_current_assets', 'total current assets', 'stock', 'G000000', '00100', '01100', None, True),
+    CrosswalkEntry('land', 'land', 'stock', 'G000000', '00100', '01200', None, True),
+    CrosswalkEntry('land_improvements', 'land improvements', 'stock', 'G000000', '00100', '01300', None, True),
+    CrosswalkEntry('accum_depr_land_improvements', 'accumulated depreciation - land improvements', 'stock', 'G000000', '00100', '01400', None, True),
+    CrosswalkEntry('buildings', 'buildings', 'stock', 'G000000', '00100', '01500', None, True),
+    CrosswalkEntry('accum_depr_buildings', 'accumulated depreciation - buildings', 'stock', 'G000000', '00100', '01600', None, True),
+    CrosswalkEntry('leasehold_improvements', 'leasehold improvements', 'stock', 'G000000', '00100', '01700', None, True),
+    CrosswalkEntry('accum_depr_leasehold', 'accumulated depreciation - leasehold improvements', 'stock', 'G000000', '00100', '01800', None, True),
+    CrosswalkEntry('fixed_equipment', 'fixed equipment', 'stock', 'G000000', '00100', '01900', None, True),
+    CrosswalkEntry('accum_depr_fixed_equipment', 'accumulated depreciation - fixed equipment', 'stock', 'G000000', '00100', '02000', None, True),
+    CrosswalkEntry('autos_trucks', 'automobiles and trucks', 'stock', 'G000000', '00100', '02100', None, True),
+    CrosswalkEntry('accum_depr_autos_trucks', 'accumulated depreciation - automobiles and trucks', 'stock', 'G000000', '00100', '02200', None, True),
+    CrosswalkEntry('major_movable_equipment', 'major movable equipment', 'stock', 'G000000', '00100', '02300', None, True),
+    CrosswalkEntry('accum_depr_major_movable', 'accumulated depreciation - major movable equipment', 'stock', 'G000000', '00100', '02400', None, True),
+    CrosswalkEntry('minor_movable_equipment_depreciable', 'minor movable equipment (depreciable)', 'stock', 'G000000', '00100', '02500', None, True),
+    CrosswalkEntry('accum_depr_minor_movable', 'accumulated depreciation - minor movable equipment', 'stock', 'G000000', '00100', '02600', None, True),
+    CrosswalkEntry('hit_designated_assets', 'health information technology (HIT) designated assets', 'stock', 'G000000', '00100', '02700', None, True),
+    CrosswalkEntry('accum_depr_hit', 'accumulated depreciation - HIT designated assets', 'stock', 'G000000', '00100', '02800', None, True),
+    CrosswalkEntry('minor_equipment_nondepreciable', 'minor equipment (nondepreciable)', 'stock', 'G000000', '00100', '02900', None, True),
+    CrosswalkEntry('total_fixed_assets', 'total fixed assets', 'stock', 'G000000', '00100', '03000', None, True),
+    CrosswalkEntry('investments', 'investments', 'stock', 'G000000', '00100', '03100', None, True),
+    CrosswalkEntry('deposits_on_leases', 'deposits on leases', 'stock', 'G000000', '00100', '03200', None, True),
+    CrosswalkEntry('due_from_owners_officers', 'due from owners/officers', 'stock', 'G000000', '00100', '03300', None, True),
+    CrosswalkEntry('total_other_assets', 'total other assets', 'stock', 'G000000', '00100', '03500', None, True),
+    CrosswalkEntry('total_assets', 'total assets', 'stock', 'G000000', '00100', '03600', None, True),
+    CrosswalkEntry('accounts_payable', 'accounts payable', 'stock', 'G000000', '00100', '03700', None, True),
+    CrosswalkEntry('salaries_wages_fees_payable', 'salaries, wages, and fees payable', 'stock', 'G000000', '00100', '03800', None, True),
+    CrosswalkEntry('payroll_taxes_payable', 'payroll taxes payable', 'stock', 'G000000', '00100', '03900', None, True),
+    CrosswalkEntry('notes_loans_payable_st', 'notes and loans payable (short term)', 'stock', 'G000000', '00100', '04000', None, True),
+    CrosswalkEntry('deferred_income', 'deferred income', 'stock', 'G000000', '00100', '04100', None, True),
+    CrosswalkEntry('accelerated_payments', 'accelerated payments', 'stock', 'G000000', '00100', '04200', None, True),
+    CrosswalkEntry('due_to_other_funds', 'due to other funds', 'stock', 'G000000', '00100', '04300', None, True),
+    CrosswalkEntry('other_current_liabilities', 'other current liabilities', 'stock', 'G000000', '00100', '04400', None, True),
+    CrosswalkEntry('total_current_liabilities', 'total current liabilities', 'stock', 'G000000', '00100', '04500', None, True),
+    CrosswalkEntry('mortgage_payable', 'mortgage payable', 'stock', 'G000000', '00100', '04600', None, True),
+    CrosswalkEntry('notes_payable_lt', 'notes payable (long term)', 'stock', 'G000000', '00100', '04700', None, True),
+    CrosswalkEntry('unsecured_loans', 'unsecured loans', 'stock', 'G000000', '00100', '04800', None, True),
+    CrosswalkEntry('other_long_term_liabilities', 'other long term liabilities', 'stock', 'G000000', '00100', '04900', None, True),
+    CrosswalkEntry('total_long_term_liabilities', 'total long term liabilities', 'stock', 'G000000', '00100', '05000', None, True),
+    CrosswalkEntry('total_liabilities', 'total liabilities', 'stock', 'G000000', '00100', '05100', None, True),
+    CrosswalkEntry('general_fund_balance', 'general fund balance', 'stock', 'G000000', '00100', '05200', None, True),
+    CrosswalkEntry('specific_purpose_fund_balance', 'specific purpose fund balance', 'stock', 'G000000', '00100', '05300', None, True),
+    CrosswalkEntry('donor_restricted_endowment_fund_balance', 'donor-created restricted endowment fund balance', 'stock', 'G000000', '00100', '05400', None, True),
+    CrosswalkEntry('donor_unrestricted_endowment_fund_balance', 'donor-created unrestricted endowment fund balance', 'stock', 'G000000', '00100', '05500', None, True),
+    CrosswalkEntry('governing_body_endowment_fund_balance', 'governing body created endowment fund balance', 'stock', 'G000000', '00100', '05600', None, True),
+    CrosswalkEntry('plant_fund_balance_invested', 'plant fund balance invested in plant', 'stock', 'G000000', '00100', '05700', None, True),
+    CrosswalkEntry('plant_fund_balance_reserve', 'plant fund balance reserve for plant improvement', 'stock', 'G000000', '00100', '05800', None, True),
+    CrosswalkEntry('total_fund_balances', 'total fund balances', 'stock', 'G000000', '00100', '05900', None, True),
+    CrosswalkEntry('total_liabilities_and_fund_balances', 'total liabilities and fund balances', 'stock', 'G000000', '00100', '06000', None, True),
+    CrosswalkEntry('contractual_allowances', 'contractual allowances and discounts on patient accounts', 'dollar_flow', 'G300000', '00100', '00200', None, True),
+    CrosswalkEntry('net_income_from_patients', 'net income from service to patients (net patient revenue less total operating expenses)', 'dollar_flow', 'G300000', '00100', '00500', None, True),
+    CrosswalkEntry('total_income', 'total income (net income from patients plus total other income)', 'dollar_flow', 'G300000', '00100', '02600', None, True),
+    CrosswalkEntry('net_income', 'net income (or loss) for the period', 'dollar_flow', 'G300000', '00100', '02900', None, True),
 )
 # fmt: on
 

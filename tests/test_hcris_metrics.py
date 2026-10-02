@@ -40,6 +40,36 @@ def _seed_report(conn, *, rpt_rec_num: int, vintage_year: int, ccn: str) -> int:
     return result.inserted_primary_key[0]
 
 
+def test_compute_report_metrics_reads_worksheet_g_balance_sheet_lines(tmp_path):
+    """Worksheet G (the balance sheet, wksht_cd G000000) is a distinct
+    worksheet from G-3 (G300000) with its own independent line numbering --
+    line 1 on G is cash on hand, not net patient revenue."""
+
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        report_id = _seed_report(conn, rpt_rec_num=5010, vintage_year=2024, ccn="170040")
+        conn.execute(
+            hcris_numeric.insert(),
+            [
+                {"report_id": report_id, "wksht_cd": "G000000", "clmn_num": "00100",
+                 "line_num": "00100", "value": Decimal("250000")},  # cash_on_hand
+                {"report_id": report_id, "wksht_cd": "G000000", "clmn_num": "00100",
+                 "line_num": "01100", "value": Decimal("500000")},  # total_current_assets
+                {"report_id": report_id, "wksht_cd": "G000000", "clmn_num": "00100",
+                 "line_num": "03600", "value": Decimal("2000000")},  # total_assets
+                {"report_id": report_id, "wksht_cd": "G300000", "clmn_num": "00100",
+                 "line_num": "02900", "value": Decimal("150000")},  # net_income
+            ],
+        )
+
+    metrics = compute_report_metrics(engine, report_id)
+
+    assert metrics["cash_on_hand"] == Decimal("250000.0000")
+    assert metrics["total_current_assets"] == Decimal("500000.0000")
+    assert metrics["total_assets"] == Decimal("2000000.0000")
+    assert metrics["net_income"] == Decimal("150000.0000")
+
+
 def test_compute_report_metrics_reads_single_line_and_summed_range(tmp_path):
     engine = _engine(tmp_path)
     with engine.begin() as conn:

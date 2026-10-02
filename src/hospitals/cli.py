@@ -45,6 +45,7 @@ from .duplicates import find_duplicate_loads, prune_redownloads
 from .gap import build_gap_report, write_xlsx
 from .hcris_fetch import BASE_URL_TEMPLATE, EARLIEST_VINTAGE_YEAR, backfill_report_fields, fetch_year
 from .hcris_metrics import compute_report_metrics, materialize_metrics
+from .hcris_ratios import compute_ratios
 from .mrf_discovery import MANIFEST_COLUMNS, discover_one, to_row
 from .mrf_fetch import MAX_BYTES, Fetched, fetch_one, requests_opener
 from .mrf_targets import DEFAULT_INFO_PATH, choose_targets, load_websites
@@ -1643,7 +1644,12 @@ def _cmd_hcris_metrics(args: argparse.Namespace) -> int:
             if not metrics:
                 print("  (no crosswalk metrics matched -- this report may not have filed those worksheets)")
             for key in sorted(metrics):
-                print(f"  {key:<22} {metrics[key]}")
+                print(f"  {key:<40} {metrics[key]}")
+            ratios = compute_ratios(metrics)
+            if ratios:
+                print("  ratios:")
+                for key in sorted(ratios):
+                    print(f"    {key:<38} {ratios[key]:.2f}")
         return 0
 
     if args.all_years:
@@ -1669,10 +1675,15 @@ def _cmd_hcris_metrics(args: argparse.Namespace) -> int:
         )
     print(f"\n{total_reports:,} report(s) processed, {total_values:,} metric value(s) written.")
     print(
-        "\nThe metrics computed so far cover revenue/expense components, bed/"
-        "discharge utilization, and uncompensated care -- not yet liquidity "
-        "ratios (days cash on hand, current ratio) or FTE/staffing, which need "
-        "a verified hospital-specific Worksheet G / S-3 Part II source."
+        "\nThe metrics computed so far cover revenue/expense components, the "
+        "full balance sheet, bed/discharge utilization, and uncompensated "
+        "care. The ratios these support (current/quick ratio, operating/"
+        "excess margin, ROE/ROA, debt to net assets, asset turnover, days in "
+        "receivables) print with --ccn. Still missing: EBITDAR, days cash on "
+        "hand, average payment period, and average age of plant (need "
+        "Worksheet A-7 Part 3) and FTE/staffing (need Worksheet S-3 Part II) "
+        "-- neither worksheet's code is confirmed from a hospital-specific "
+        "source yet."
     )
     return 0
 
