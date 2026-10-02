@@ -110,6 +110,29 @@ def test_compute_report_metrics_reads_worksheet_a_a7_and_s3_part_ii(tmp_path):
     assert metrics["contract_labor_main"] == Decimal("15000.0000")
 
 
+def test_compute_report_metrics_reads_total_paid_hours_from_s3_part_ii_line_1(tmp_path):
+    """S-3 Part II has no literal FTE field -- line 1 col 5 is the
+    hospital-wide total paid hours row, distinguished from a cost-center
+    row's hours by line number alone (both use the same column)."""
+
+    engine = _engine(tmp_path)
+    with engine.begin() as conn:
+        report_id = _seed_report(conn, rpt_rec_num=5030, vintage_year=2024, ccn="170060")
+        conn.execute(
+            hcris_numeric.insert(),
+            [
+                {"report_id": report_id, "wksht_cd": "S300002", "clmn_num": "00500",
+                 "line_num": "00100", "value": Decimal("2500000")},  # total_paid_hours
+                {"report_id": report_id, "wksht_cd": "S300002", "clmn_num": "00500",
+                 "line_num": "02600", "value": Decimal("40000")},  # a cost-center's own hours, not the total
+            ],
+        )
+
+    metrics = compute_report_metrics(engine, report_id)
+
+    assert metrics["total_paid_hours"] == Decimal("2500000.0000")
+
+
 def test_compute_report_metrics_reads_single_line_and_summed_range(tmp_path):
     engine = _engine(tmp_path)
     with engine.begin() as conn:

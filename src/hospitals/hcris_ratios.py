@@ -40,11 +40,24 @@ they're not mistaken for equally source-verified:
     specifically, not all liabilities) rather than a cost-report-specific
     formula, since this ratio comes from credit-rating methodology, not the
     cost report itself.
+
+``total_ftes`` is not a ratio but a unit conversion: CMS's cost report has no
+field literally called "FTEs," only total paid hours (hcris_crosswalk.py's
+``total_paid_hours``, Worksheet S-3 Part II line 1 col 5 -- the hospital-wide
+total row). FTEs are paid hours divided by 2080 (52 weeks x 40 hours), the
+standard FTE-year used throughout hospital workforce reporting -- not this
+module's invention, but also not a value CMS asserts directly, so it is
+computed here rather than treated as a raw crosswalk cell.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal
+
+#: Hours in one full-time-equivalent year (52 weeks x 40 hours) -- the
+#: standard conversion used throughout hospital workforce reporting, not
+#: specific to this project.
+HOURS_PER_FTE_YEAR = Decimal(2080)
 
 Metrics = dict[str, Decimal | str]
 
@@ -98,6 +111,8 @@ def compute_ratios(metrics: Metrics) -> dict[str, Decimal]:
     ipbeddays_adultped = _num(metrics, "ipbeddays_adultped")
     availbeddays_adultped = _num(metrics, "availbeddays_adultped")
     ipdischarges_adultped = _num(metrics, "ipdischarges_adultped")
+    total_paid_hours = _num(metrics, "total_paid_hours")
+    beds_total = _num(metrics, "beds_total")
 
     non_oper_rev = othinc  # AHD's "non-operating revenue" is G-3 line 25, same cell as othinc.
     net_assets = None
@@ -238,5 +253,19 @@ def compute_ratios(metrics: Metrics) -> dict[str, Decimal]:
         cash_to_debt = _div(liquid, total_long_term_liabilities)
         if cash_to_debt is not None:
             add("cash_to_debt_pct", cash_to_debt * 100)
+
+    # Total FTEs = total paid hours / 2080 (see module docstring).
+    total_ftes = None
+    if total_paid_hours is not None:
+        total_ftes = total_paid_hours / HOURS_PER_FTE_YEAR
+        add("total_ftes", total_ftes)
+
+    # Net patient revenue per FTE
+    if netpatrev is not None and total_ftes not in (None, Decimal(0)):
+        add("net_patient_revenue_per_fte", netpatrev / total_ftes)
+
+    # FTEs per staffed bed
+    if total_ftes is not None and beds_total not in (None, Decimal(0)):
+        add("ftes_per_staffed_bed", total_ftes / beds_total)
 
     return ratios

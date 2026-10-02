@@ -35,6 +35,19 @@ alongside the already-confirmed ``S300001`` for Part I). Every line/column
 this crosswalk uses from those two codes falls inside the observed range,
 which would be a remarkable coincidence if either code were wrong.
 
+S300002's own column layout -- also not stated by either source beyond "col
+4" for contract labor -- was likewise confirmed from the data: column 1 is
+not a data column at all but a cross-reference to the corresponding
+Worksheet A line (constant ``200`` wherever line 1 appears, matching AHD's
+own "Salary Expense - A, line 200" citation), column 2 is the dollar amount
+as reported, column 3 is a rare reclassification adjustment, column 4 is the
+reclassified amount (column 2 adjusted by column 3 -- identical to column 2
+whenever there is no reclassification, which is why AHD's contract-labor
+citation and the real data agree exactly), and column 5 is the paid hours
+tied to that dollar amount. There is no literal "FTE" field anywhere on this
+worksheet; hcris_ratios.py derives one from total_paid_hours using the
+standard 2080-hour FTE-year convention.
+
 A wrong mapping is a bug in one of those upstream sources (or in this
 project's own data) to fix at the source, not a judgment call made here.
 
@@ -195,6 +208,12 @@ CROSSWALK: tuple[CrosswalkEntry, ...] = (
     CrosswalkEntry('interest_expense', 'interest expense (worksheet A-7 part III, line 3, col 11)', 'dollar_flow', 'A700003', '01100', '00300', None, True),
     CrosswalkEntry('contract_labor_addon', 'contract labor, add-on line 7.01 (worksheet S-3 part II, col 4)', 'dollar_flow', 'S300002', '00400', '00701', None, True),
     CrosswalkEntry('contract_labor_main', 'contract labor, lines 11-16 (worksheet S-3 part II, col 4)', 'dollar_flow', 'S300002', '00400', '01100', '01600', True),
+    # S-3 Part II has no literal "FTE" field -- line 1 (which cross-references
+    # Worksheet A line 200, "Total salaries," confirmed via column 1's own
+    # content) is the hospital-wide total row, and column 5 there is total
+    # paid hours. FTEs are computed from this via the standard 2080-hour
+    # FTE-year convention in hcris_ratios.py, not asserted as a raw field.
+    CrosswalkEntry('total_paid_hours', 'total hospital paid hours, all employees (worksheet S-3 part II, line 1, col 5)', 'flow', 'S300002', '00500', '00100', None, True),
 )
 # fmt: on
 

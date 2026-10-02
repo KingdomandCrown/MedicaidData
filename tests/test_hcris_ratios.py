@@ -42,6 +42,8 @@ FULL_METRICS = {
     "ipbeddays_adultped": Decimal("18250"),
     "availbeddays_adultped": Decimal("36500"),
     "ipdischarges_adultped": Decimal("3650"),
+    "total_paid_hours": Decimal("2500000"),
+    "beds_total": Decimal("200"),
 }
 
 
@@ -186,6 +188,40 @@ def test_cash_to_debt_is_absent_without_long_term_liabilities():
     del metrics["total_long_term_liabilities"]
 
     assert "cash_to_debt_pct" not in compute_ratios(metrics)
+
+
+def test_total_ftes_is_paid_hours_over_2080():
+    ratios = compute_ratios(FULL_METRICS)
+    assert ratios["total_ftes"] == Decimal("2500000") / Decimal("2080")
+
+
+def test_net_patient_revenue_per_fte_and_ftes_per_staffed_bed():
+    ratios = compute_ratios(FULL_METRICS)
+    ftes = Decimal("2500000") / Decimal("2080")
+    assert ratios["net_patient_revenue_per_fte"] == Decimal("1000000") / ftes
+    assert ratios["ftes_per_staffed_bed"] == ftes / Decimal("200")
+
+
+def test_fte_ratios_are_absent_without_paid_hours():
+    metrics = dict(FULL_METRICS)
+    del metrics["total_paid_hours"]
+
+    ratios = compute_ratios(metrics)
+    assert "total_ftes" not in ratios
+    assert "net_patient_revenue_per_fte" not in ratios
+    assert "ftes_per_staffed_bed" not in ratios
+    # Unrelated ratios still compute fine.
+    assert "operating_margin_pct" in ratios
+
+
+def test_ftes_per_staffed_bed_is_absent_without_bed_count():
+    metrics = dict(FULL_METRICS)
+    del metrics["beds_total"]
+
+    ratios = compute_ratios(metrics)
+    assert "ftes_per_staffed_bed" not in ratios
+    assert "total_ftes" in ratios  # unaffected by the missing bed count
+    assert "net_patient_revenue_per_fte" in ratios
 
 
 def test_alpha_valued_metrics_are_ignored_not_divided():
