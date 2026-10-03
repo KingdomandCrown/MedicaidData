@@ -128,3 +128,17 @@ def test_limit_caps_items(wide_csv):
     rows = list(rows)
     # Only the first item (Widget A) is read -> its 2 payer rows.
     assert {r.description for r in rows} == {"Widget A"}
+
+
+def test_license_state_header_with_spaces_around_pipe_is_stripped():
+    """A real Kansas critical access hospital's file names the column
+    "license_number | KS" (spaces around the pipe). The unstripped state
+    (" KS") would never equal the POS file's "KS", silently breaking the
+    name+state linking fallback for every hospital whose header is spaced
+    this way."""
+
+    meta = pt.parse_metadata(
+        ["hospital_name", "license_number | KS"],
+        ["Clay County Medical Center", "H-014-001"],
+    )
+    assert meta.license_state == "KS"

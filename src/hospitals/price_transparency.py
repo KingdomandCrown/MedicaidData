@@ -383,7 +383,7 @@ def parse_metadata(meta_header: Sequence[str], meta_values: Sequence[str]) -> Mr
     for header_name, i in idx.items():
         if header_name.startswith("license_number"):
             if "|" in header_name:
-                license_state = header_name.split("|", 1)[1].upper()
+                license_state = header_name.split("|", 1)[1].strip().upper()
             raw = clean_str(meta_values[i]) if i < len(meta_values) else None
             if raw:
                 raw = raw.strip().strip('"').strip()
